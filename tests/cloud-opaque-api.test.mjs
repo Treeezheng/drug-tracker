@@ -23,7 +23,7 @@ async function fixture(t,options={}){
   const request=async(path,body,{cookie,owner,source='198.51.100.4',headers={}}={})=>new Promise((resolve,reject)=>{
     const data=JSON.stringify(body);const req=httpRequest({host:'127.0.0.1',port:app.server.address().port,path:'/drug/api'+path,method:'POST',headers:{Host:new URL(origin).host,Origin:origin,'X-Forwarded-Proto':'https','X-Forwarded-For':source,'Content-Type':'application/json','Content-Length':Buffer.byteLength(data),...(cookie?{Cookie:cookie}:{}),...(owner?{'X-Dose-Owner':owner}:{}),...headers}},res=>{let text='';res.on('data',part=>text+=part);res.once('end',()=>resolve({status:res.statusCode,data:JSON.parse(text),cookie:res.headers['set-cookie']?.[0].split(';')[0],headers:res.headers}));});req.once('error',reject);req.end(data);
   });
-  async function register(username){const start=opaque.client.startRegistration({password}),a=await request('/auth/opaque/register/start',{username,registrationRequest:start.registrationRequest});assert.equal(a.status,200);const record=opaque.client.finishRegistration({password,clientRegistrationState:start.clientRegistrationState,registrationResponse:a.data.registrationResponse,identifiers:identity(username),keyStretching:KSF});const b=await request('/auth/opaque/register/finish',{challengeId:a.data.challengeId,registrationRecord:record.registrationRecord,...pair(a.data.ownerId),recoveryAuthHash:hash(randomBytes(32))});assert.equal(b.status,201);return b;}
+  async function register(username,requestOptions={}){const start=opaque.client.startRegistration({password}),a=await request('/auth/opaque/register/start',{username,registrationRequest:start.registrationRequest},requestOptions);assert.equal(a.status,200);const record=opaque.client.finishRegistration({password,clientRegistrationState:start.clientRegistrationState,registrationResponse:a.data.registrationResponse,identifiers:identity(username),keyStretching:KSF});const b=await request('/auth/opaque/register/finish',{challengeId:a.data.challengeId,registrationRecord:record.registrationRecord,...pair(a.data.ownerId),recoveryAuthHash:hash(randomBytes(32))},requestOptions);assert.equal(b.status,201);return b;}
   return{request,register,dbPath};
 }
 
@@ -48,9 +48,12 @@ test('expired and malformed PAKE proofs consume only their one challenge and can
   assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_sessions').get().n,1);db.close();
 });
 
-test('cumulative source quota stops rapid consumed handshakes across known usernames; malformed bodies do not spend it',async t=>{
+test('protocol source quota spans consumed handshakes across known usernames; malformed bodies do not spend account or protocol quotas',async t=>{
   const f=await fixture(t,{loginAttemptLimit:1,registrationAttemptLimit:100});
-  const users=[];for(let i=0;i<5;i++)users.push((await f.register(`source-owner-${i}`)).data.user);
+  // Account setup has its own early request budget. The tested source uses 15
+  // requests, below its 16-request cap, so the fifth valid start isolates the
+  // separate four-handshake protocol-source limit rather than HTTP admission.
+  const users=[];for(let i=0;i<5;i++)users.push((await f.register(`source-owner-${i}`,{source:'192.0.2.110'})).data.user);
   for(let i=0;i<6;i++)assert.equal((await f.request('/auth/opaque/login/start',{username:'source-owner-0',startLoginRequest:'bad'})).status,400);
   const first=opaque.client.startLogin({password});
   for(let i=0;i<4;i++){
@@ -59,6 +62,26 @@ test('cumulative source quota stops rapid consumed handshakes across known usern
   }
   const rejected=await f.request('/auth/opaque/login/start',{username:users[4].username,startLoginRequest:first.startLoginRequest});assert.equal(rejected.status,429);assert.ok(Number(rejected.headers['retry-after'])>0);
   const other=await f.request('/auth/opaque/login/start',{username:users[4].username,startLoginRequest:first.startLoginRequest},{source:'203.0.113.71'});assert.equal(other.status,200);
+});
+
+test('malformed authentication requests spend the early source budget while preserving the account budget',async t=>{
+  const f=await fixture(t,{loginAttemptLimit:1});
+  const account=await f.register('early-request-owner',{source:'192.0.2.110'});
+  const malformed={username:account.data.user.username,startLoginRequest:'bad'};
+  // Small, complete requests run sequentially; this checks quota accounting,
+  // without delayed bodies, concurrent traffic or load generation.
+  for(let i=0;i<16;i++)assert.equal((await f.request('/auth/opaque/login/start',malformed)).status,400);
+  const rejected=await f.request('/auth/opaque/login/start',malformed,{headers:{'Content-Type':'text/plain'}});
+  assert.equal(rejected.status,429);assert.ok(Number(rejected.headers['retry-after'])>0);
+  // 429 instead of 415 confirms admission stops before body/content-type parsing.
+  const db=new DatabaseSync(f.dbPath);
+  try{
+    assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_auth_challenges').get().n,0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_sessions').get().n,1);
+  }finally{db.close();}
+  const first=opaque.client.startLogin({password});
+  const permitted=await f.request('/auth/opaque/login/start',{username:account.data.user.username,startLoginRequest:first.startLoginRequest},{source:'203.0.113.71'});
+  assert.equal(permitted.status,200,'Malformed requests did not exhaust the known account authentication budget.');
 });
 
 test('primary endpoints reject raw-password and client-key fields before any account can be created',async t=>{

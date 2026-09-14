@@ -23,6 +23,9 @@ const emptyData = (): AppData => ({ profile: null, doses: [], scenarios: [], fav
 const syncing = new Map<string, Promise<void>>();
 let activeAccount: string | null = null;
 let accountGeneration = 0;
+// Bind a fetched snapshot to the device-cache epoch read before its request.
+// Weak references retain neither health data nor guards once callers release it.
+const snapshotGuards = new WeakMap<object, { ownerId: string; generation: number; cacheEpoch: string | undefined }>();
 
 export function setActiveAccount(userId: string | null): void {
   activeAccount = userId;
@@ -143,7 +146,13 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, owner
   const isSession = path === '/session';
   const isAuth = path.startsWith('/auth/');
   const owner = ownerId ?? activeAccount ?? undefined;
+  const snapshotGeneration = accountGeneration;
+  const readsPrivateSnapshot = method === 'GET' && (path === '/data' || path === '/export');
   let requestCacheEpoch: string | undefined;
+  if (owner && readsPrivateSnapshot) {
+    const epochKey = keys(owner)[2];
+    [requestCacheEpoch] = await getMany<string>([epochKey], store);
+  }
   if (owner && path === '/import' && method === 'POST' && (await readState(owner)).queue.length) {
     throw new ApiError('Sync or resolve pending changes before importing a backup.', 409);
   }
@@ -156,6 +165,15 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, owner
   }
   const generation = accountGeneration;
   const data = await request<T>(path, method, body, isSession || isAuth ? undefined : owner);
+  if (owner && path === '/data' && method === 'GET' && data && typeof data === 'object') {
+    snapshotGuards.set(data, { ownerId: owner, generation: snapshotGeneration, cacheEpoch: requestCacheEpoch });
+  }
+  if (owner && path === '/export' && method === 'GET') {
+    const [currentEpoch] = await getMany<string>([keys(owner)[2]], store);
+    if (snapshotGeneration !== accountGeneration || requestCacheEpoch !== currentEpoch) {
+      throw new ApiError('This account or its device cache changed. Sign in again before exporting records.', 401);
+    }
+  }
   if (owner && ['PUT', 'DELETE'].includes(method) && mutationPath(path)) {
     try {
       await changeState(owner, (state) => {
@@ -178,7 +196,13 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, owner
 /** Return the visible saved-plus-pending view; never overwrite a queued edit. */
 export async function cacheData(userId: string, data: AppData): Promise<AppData> {
   if (cloudMode) return structuredClone(data);
+  const guard = snapshotGuards.get(data);
   return changeState(userId, (state) => {
+    // Check in the write transaction, not before it: another tab's completed
+    // logout/deletion must invalidate an older in-flight GET as well as PUTs.
+    if (guard && (guard.ownerId !== userId || guard.generation !== accountGeneration || guard.cacheEpoch !== state.cacheEpoch)) {
+      throw new ApiError('This account or its device cache changed. Sign in again before loading records.', 401);
+    }
     state.cache = structuredClone(data);
     return withPending(state.cache, state.queue);
   });
@@ -259,11 +283,14 @@ export async function syncQueue(userId: string): Promise<void> {
 /** Only explicit account deletion should discard pending health records. */
 export async function clearCache(userId: string, discardPending = false): Promise<void> {
   if (cloudMode) return;
-  await changeState(userId, (state) => {
-    if (state.queue.length && !discardPending) throw new Error('Pending changes remain on this device. Sync or export them before signing out.');
+  const pending = await changeState(userId, (state) => {
     state.cache = undefined;
     // Persist the invalidation across tabs; it contains no health data.
     state.cacheEpoch = crypto.randomUUID();
     if (discardPending) state.queue = [];
+    return state.queue.length > 0;
   });
+  // A peer can enqueue after logout preflight. Commit revocation without
+  // discarding that work, then warn; throwing inside would abort revocation.
+  if (pending) throw new Error('Pending changes remain on this device. Sign in again to sync or export them before clearing browser storage.');
 }

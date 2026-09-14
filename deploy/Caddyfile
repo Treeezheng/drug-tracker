@@ -6,7 +6,11 @@ treeezh.com {
 	handle @drug {
 		# cloud.mjs consumes /drug itself. Do not use handle_path or rewrite.
 		# The incoming Host and Origin must remain intact.
-		reverse_proxy 127.0.0.1:4312
+		# Pair with CLOUD_PROXY_MODE=caddy-loopback. Caddy must be the public edge.
+		# Overwrite, rather than append or preserve, client-supplied source values.
+		reverse_proxy 127.0.0.1:4312 {
+			header_up X-Drug-Client-IP {remote_host}
+		}
 	}
 
 	# No personal website has been configured in this template.

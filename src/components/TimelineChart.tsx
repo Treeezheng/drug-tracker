@@ -4,10 +4,11 @@ import { hasKnownTotal, hasMissingTimelineData } from '../lib/timeline-data';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { Dose, Profile } from '../lib/types';
-import { concentrationAnalyte, contributions, contributesToGroup, doseTimestamp, effectWindow, includeTimelineDose, modelGroup, referenceForDose, referenceOverlay } from '../lib/model';
+import { concentrationAnalyte, contributions, contributesToGroup, doseTimestamp, effectWindow, includeTimelineDose, modelGroup, referenceForDose } from '../lib/model';
 import { addDays, dayWindow, formatInstant, sleepIntervals } from '../lib/time';
 import { createTimelinePointer, timelinePointerTime } from '../lib/timeline-pointer';
 import { estimateContribution, estimateTotals } from '../lib/timeline-estimates';
+import { sampleTimelinePanel, timelinePanelGeometry } from '../lib/timeline-series';
 import { products, sources } from '../lib/catalog';
 import DoseFormula from './DoseFormula';
 export const colors=['#426a95','#8c729c','#b48654','#5e8b83','#9d7075','#71839b'];
@@ -17,25 +18,34 @@ export function TimelineEmptyState({pending=false,hasHistory=false,onAddDose}:{p
 }
 export default function TimelineChart({doses,date,days,profile,publishedOnly,onMove,onProfile,baseline='empty',hasPendingDose=false,omittedHistoryCount=0,omittedUnknownHistoryCount=0,onAddDose,onSources}:Props){
   const readingsId=useId(),dataNoteId=useId(),[showReadings,setShowReadings]=useState(false),[showBasis,setShowBasis]=useState(false),noteRef=useRef<HTMLElement>(null);
-  const {start,end}=dayWindow(date,days,profile.timeZone),ref=useRef<HTMLDivElement>(null);
+  const {start,end}=useMemo(()=>dayWindow(date,days,profile.timeZone),[date,days,profile.timeZone]),ref=useRef<HTMLDivElement>(null);
   const [width,setWidth]=useState(800),[hover,setHover]=useState<number|null>(null),[pinned,setPinned]=useState<number|null>(null);
   useEffect(()=>{const el=ref.current;if(!el)return;const observer=new ResizeObserver(()=>setWidth(Math.max(280,el.clientWidth)));observer.observe(el);return()=>observer.disconnect();},[]);
   useEffect(()=>{setHover(null);if(pinned!==null&&(pinned<start||pinned>end))setPinned(null);},[start,end,pinned]);
   const at=pinned??hover??start+(end-start)/2;
-  const visible=doses.filter(includeTimelineDose);
-  const names=[...new Set(visible.filter(d=>modelGroup(d).reference||d.assumptions?.accepted||referenceForDose(d)).map(d=>modelGroup(d).group))];
-  const eventRows=visible.filter(d=>!names.some(group=>contributesToGroup(d,group)));
-  const unknownEarlier=visible.some(d=>doseTimestamp(d)<start&&hasMissingTimelineData([d],start,end,publishedOnly,concentrationAnalyte(d)?.group));
-  const groups=[...names,...(eventRows.length||!names.length?['Timeline']:[])];
-  const totals=estimateTotals(visible,at,publishedOnly),readings=contributions(visible,at,publishedOnly),sleeps=sleepIntervals(start,end,profile);
+  const visible=useMemo(()=>doses.filter(includeTimelineDose),[doses]);
+  const {names,eventRows,groups}=useMemo(()=>{
+    const names=[...new Set(visible.filter(d=>modelGroup(d).reference||d.assumptions?.accepted||referenceForDose(d)).map(d=>modelGroup(d).group))];
+    const eventRows=visible.filter(d=>!names.some(group=>contributesToGroup(d,group)));
+    return {names,eventRows,groups:[...names,...(eventRows.length||!names.length?['Timeline']:[])]};
+  },[visible]);
+  const unknownEarlier=useMemo(()=>visible.some(d=>doseTimestamp(d)<start&&hasMissingTimelineData([d],start,end,publishedOnly,concentrationAnalyte(d)?.group)),[visible,start,end,publishedOnly]);
+  const totals=useMemo(()=>estimateTotals(visible,at,publishedOnly),[visible,at,publishedOnly]);
+  const readings=useMemo(()=>contributions(visible,at,publishedOnly),[visible,at,publishedOnly]);
+  const sleeps=useMemo(()=>sleepIntervals(start,end,profile),[start,end,profile]);
   const needsDataNote=(dose:Dose)=>(!Number.isFinite(doseTimestamp(dose))||doseTimestamp(dose)<end)&&(!!referenceForDose(dose)||hasMissingTimelineData([dose],start,end,publishedOnly)||[at,end-1,...sleeps.flatMap(sleep=>[sleep.start,sleep.end])].some(time=>contributions([dose],time,publishedOnly).some(item=>item.tail||item.evidence==='D')));
   const showDataNote=visible.some(needsDataNote)||omittedUnknownHistoryCount>0;
   const sourceIds=[...new Set(visible.flatMap(dose=>[...(products.find(product=>product.id===dose.productId)?.sourceIds??[]),...(referenceForDose(dose)?.sourceIds??[])]))];
   function revealDataNote(){setShowReadings(true);setShowBasis(true);requestAnimationFrame(()=>noteRef.current?.focus());}
   const dataStar=()=> <button type="button" className="text-button data-note-link" aria-label="Show sources and calculation limits" aria-controls={dataNoteId} onClick={revealDataNote}><sup>*</sup></button>;
   const sampleTimes=useMemo(()=>Array.from({length:289},(_,i)=>start+(end-start)*i/288),[start,end]);
-  const headers=Array.from({length:days},(_,i)=>{const d=addDays(date,i);return {date:d,...dayWindow(d,1,profile.timeZone)};});
+  const headers=useMemo(()=>Array.from({length:days},(_,i)=>{const d=addDays(date,i);return {date:d,...dayWindow(d,1,profile.timeZone)};}),[date,days,profile.timeZone]);
   const W=width,H=260,L=40,R=24,T=36,B=38,iw=W-L-R;
+  const panels=useMemo(()=>groups.map(group=>{
+    const timing=group==='Timeline',members=timing?eventRows:visible.filter(d=>contributesToGroup(d,group));
+    return {group,timing,members,samples:timing?{series:[],curves:[],max:1}:sampleTimelinePanel(members,group,sampleTimes,publishedOnly)};
+  }),[groups,eventRows,visible,sampleTimes,publishedOnly]);
+  const plots=useMemo(()=>panels.map(panel=>({...panel,...timelinePanelGeometry(panel.samples,sampleTimes,W,panel.timing?118:H,start,end)})),[panels,sampleTimes,W,start,end]);
   const pointerPlot=useRef({width:W,left:L,right:R,start,end}),pinnedValue=useRef(pinned);
   pointerPlot.current={width:W,left:L,right:R,start,end};pinnedValue.current=pinned;
   const scrubber=useMemo(()=>createTimelinePointer({
@@ -47,24 +57,10 @@ export default function TimelineChart({doses,date,days,profile,publishedOnly,onM
   const tickHours=days===1?(width<500?6:4):12;
   function move(e:React.PointerEvent<SVGGElement>,d:Dose){if(d.status==='actual'||!onMove||!e.currentTarget.hasPointerCapture(e.pointerId))return;e.stopPropagation();const r=e.currentTarget.ownerSVGElement!.getBoundingClientRect();const t=start+Math.max(0,Math.min(1,((e.clientX-r.left)/r.width*W-L)/iw))*(end-start);const step=(profile.timeIncrementMinutes||5)*60000;onMove(d.id,new Date(Math.round(t/step)*step).toISOString());}
   return <div className="simple-timeline"><div className="chart-main" ref={ref}>
-    {visible.length===0?<TimelineEmptyState pending={hasPendingDose||doses.some(d=>d.status==='simulated')} hasHistory={omittedHistoryCount>0||omittedUnknownHistoryCount>0||doses.some(d=>d.status==='actual')} onAddDose={onAddDose}/>:groups.map((group,index)=>{
-      const timing=group==='Timeline',members=timing?eventRows:visible.filter(d=>contributesToGroup(d,group)),unit=!timing?totals[group]?.unit??'':'';
-      const panelH=timing?118:H, panelIh=panelH-T-B;
-      const series=sampleTimes.map(t=>estimateTotals(members,t,publishedOnly)[group]);
-      const overlays=members.flatMap(dose=>{const reference=referenceForDose(dose);return reference?[{dose,reference,values:sampleTimes.map(t=>referenceOverlay(dose,t,publishedOnly)?.value??null)}]:[];});
-      const max=Math.max(1,...series.map(v=>v?.value||0),...overlays.flatMap(item=>item.values.map(value=>value??0)));
-      const ceiling=unit==='ng/mL'?Math.max(6,Math.ceil(max*1.1/2)*2):Math.max(2,Math.ceil(max*1.1));
+    {visible.length===0?<TimelineEmptyState pending={hasPendingDose||doses.some(d=>d.status==='simulated')} hasHistory={omittedHistoryCount>0||omittedUnknownHistoryCount>0||doses.some(d=>d.status==='actual')} onAddDose={onAddDose}/>:plots.map(({group,timing,members,ceiling,totalPaths,curves},index)=>{
+      const unit=!timing?totals[group]?.unit??'':'';
+      const panelH=timing?118:H,panelIh=panelH-T-B;
       const y=(v:number)=>T+panelIh-v/ceiling*panelIh;
-      const path=(values:(number|null)[])=>{let active=false;return values.map((v,i)=>{if(v===null){active=false;return '';}const text=`${active?'L':'M'}${x(sampleTimes[i]).toFixed(2)},${y(v).toFixed(2)}`;active=true;return text;}).join(' ');};
-      const totalPaths={solid:'',estimated:''};
-      let previousKind='';
-      for(let i=1;i<series.length;i++){
-        const before=series[i-1],after=series[i];
-        if(!hasKnownTotal(before,sampleTimes[i-1])||!hasKnownTotal(after,sampleTimes[i])){previousKind='';continue;}
-        const kind=before!.complete&&after!.complete&&!before!.tail&&!after!.tail&&!before!.hasReference&&!after!.hasReference?'solid':'estimated';
-        if(previousKind!==kind)totalPaths[kind]+=` M${x(sampleTimes[i-1]).toFixed(2)},${y(before!.value).toFixed(2)}`;
-        totalPaths[kind]+=` L${x(sampleTimes[i]).toFixed(2)},${y(after!.value).toFixed(2)}`;previousKind=kind;
-      }
       const current=totals[group];
       return <div className="analyte-panel" key={group}><div className="chart-heading"><h2>{group}</h2><div className="chart-heading-meta"><span className="muted">{timing?'':`${unit} · estimate`}</span></div></div><div className="day-headings" style={{paddingLeft:L,paddingRight:R}}>{headers.map(h=><span key={h.date} style={{width:`${(h.end-h.start)/(end-start)*100}%`}}>{new Intl.DateTimeFormat('en-US',{timeZone:profile.timeZone,weekday:'short',month:'short',day:'numeric'}).format(h.start)}</span>)}</div>
       <svg className="chart-svg" viewBox={`0 0 ${W} ${panelH}`} role="img" tabIndex={0} aria-description="Point, tap or drag horizontally to read a time. Swipe vertically to scroll the page. Use arrow keys to move through time; Escape returns to pointer reading." onKeyDown={event=>{const direction=event.key==='ArrowRight'?1:event.key==='ArrowLeft'?-1:0;if(direction){event.preventDefault();setPinned(Math.min(end,Math.max(start,at+direction*(profile.timeIncrementMinutes||5)*60000)));}else if(event.key==='Escape'){scrubber.reset();setPinned(null);}}} aria-label={timing?'Dose times':`${group}, ${unit}. Exact readings are available below.`} onPointerDown={scrubber.down} onPointerMove={scrubber.move} onPointerUp={scrubber.up} onPointerCancel={scrubber.cancel} onLostPointerCapture={scrubber.cancel} onPointerLeave={scrubber.leave}>
@@ -74,8 +70,8 @@ export default function TimelineChart({doses,date,days,profile,publishedOnly,onM
         {headers.slice(1).map(h=><line key={h.date} x1={x(h.start)} x2={x(h.start)} y1={T-10} y2={y(0)} stroke="#b9c2cd"/>)}
         {Array.from({length:Math.ceil((end-start)/3600000/tickHours)+1},(_,i)=>start+i*tickHours*3600000).filter(t=>t<=end).map(t=><text key={t} x={x(t)} y={panelH-12} textAnchor="middle">{new Intl.DateTimeFormat('en-US',{timeZone:profile.timeZone,hour:'numeric',hour12:profile.timeFormat==='12h'}).format(t)}</text>)}
         <g clipPath={`url(#plot-${index})`}>
-          {!timing&&members.filter(d=>!referenceForDose(d)).map(d=><path key={d.id} d={path(sampleTimes.map(t=>estimateContribution(d,t,group,publishedOnly)?.value??null))} stroke={colors[visible.findIndex(v=>v.id===d.id)%colors.length]} strokeWidth="1.5" fill="none"/>)}
-          {!timing&&overlays.map(({dose,values})=><path className="reference-overlay-path" key={`reference-${dose.id}`} d={path(values)} stroke={colors[visible.findIndex(item=>item.id===dose.id)%colors.length]} strokeWidth="2.3" fill="none"/>)}
+          {!timing&&curves.filter(curve=>!curve.reference).map(({dose:d,path})=><path key={d.id} d={path} stroke={colors[visible.findIndex(v=>v.id===d.id)%colors.length]} strokeWidth="1.5" fill="none"/>)}
+          {!timing&&curves.filter(curve=>curve.reference).map(({dose,path})=><path className="reference-overlay-path" key={`reference-${dose.id}`} d={path} stroke={colors[visible.findIndex(item=>item.id===dose.id)%colors.length]} strokeWidth="2.3" fill="none"/>)}
           {!timing&&<><path className="total-reference-path" d={totalPaths.solid} stroke="#426a95" strokeWidth="2.7" fill="none" strokeLinejoin="round"/><path className="total-estimated-path" d={totalPaths.estimated} stroke="#426a95" strokeWidth="2.7" fill="none" strokeLinejoin="round"/></>}
           {members.filter(d=>doseTimestamp(d)>=start&&doseTimestamp(d)<=end).map(d=>{const dx=x(doseTimestamp(d)),color=colors[visible.findIndex(v=>v.id===d.id)%colors.length];return <g key={d.id} style={{cursor:d.status==='actual'||!onMove?'default':'ew-resize',touchAction:d.status==='actual'||!onMove?'pan-y':'none'}} onClick={e=>e.stopPropagation()} onPointerDown={e=>{if(d.status==='actual'||!onMove)return;e.stopPropagation();e.currentTarget.setPointerCapture(e.pointerId);}} onPointerMove={e=>move(e,d)} onPointerUp={e=>{move(e,d);if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);}}><line x1={dx} x2={dx} y1={T+14} y2={y(0)} stroke={color} opacity=".25"/><rect x={dx-22} y={y(0)-22} width="44" height="44" fill="transparent"/>{d.status==='actual'?<circle cx={dx} cy={y(0)} r="5" fill={color} stroke="white" strokeWidth="1.5"/>:<path d={`M${dx},${y(0)-5}l5,5 -5,5 -5,-5Z`} fill={color} stroke="white"/>}</g>;})}
         </g>

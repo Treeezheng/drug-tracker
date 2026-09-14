@@ -60,6 +60,20 @@ test('real PostgreSQL OPAQUE transactions and cross-process HTTP authentication'
     const row=(await control.query('SELECT auth_mode,password_hash,auth_version FROM drug_tracker.accounts WHERE id=$1',[owner])).rows[0];assert.equal(row.auth_mode,'opaque-v1');assert.equal(row.password_hash,'!opaque-v1');assert.equal(Number(row.auth_version),1);
     await assert.rejects(repos[0].getOrCreateOpaqueSetup(opaque.server.createSetup(),opaque.server.createSetup()),fail(400));
   });
+  await t.test('normal OPAQUE logins and registration prune expired sessions while preserving current devices',async()=>{
+    const expired=session();
+    await repos[0].loginOpaque({ownerId:owner,authVersion:1},expired);
+    await control.query('UPDATE drug_tracker.sessions SET expires_at=$1 WHERE token_hash=$2',[Date.now()-1000,expired.tokenHash]);
+    assert.equal(await repos[0].session(expired.tokenHash),null);
+    await repos[1].loginOpaque({ownerId:owner,authVersion:1},session());
+    assert.equal((await control.query('SELECT 1 FROM drug_tracker.sessions WHERE token_hash=$1',[expired.tokenHash])).rowCount,0);
+    const anotherExpired=session();
+    await repos[0].loginOpaque({ownerId:owner,authVersion:1},anotherExpired);
+    await control.query('UPDATE drug_tracker.sessions SET expires_at=$1 WHERE token_hash=$2',[Date.now()-1000,anotherExpired.tokenHash]);
+    await device().client.registerSecure('pg-expiry-cleanup-owner',next);
+    assert.equal((await control.query('SELECT 1 FROM drug_tracker.sessions WHERE token_hash=$1',[anotherExpired.tokenHash])).rowCount,0);
+    for(const current of[a,b,other])assert.ok(await repos[0].session(current.tokenHash));
+  });
   await t.test('one-time challenges bind their transport source and purpose and never reveal owner on login start',async()=>{
     const first=opaque.client.startLogin({password:master});
     const start=await a.raw('/auth/opaque/login/start',{username:'pg-opaque-owner',startLoginRequest:first.startLoginRequest});assert.equal(start.status,200);assert.equal(Object.hasOwn(start.data,'ownerId'),false);

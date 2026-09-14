@@ -37,7 +37,7 @@ export async function initializeOpaquePostgres(client) {
 }
 
 /** Existing repository supplies account→session transaction locking and row readers. */
-export function opaquePostgresMethods({pool,transaction,lockOwner,requireSession,addSession,read}) {
+export function opaquePostgresMethods({pool,transaction,lockOwner,requireSession,addSession,read,cleanupExpiredSessions}) {
   const opaqueOwner=async(client,owner,authVersion,sessionHash,mode='SHARE')=>{
     version(authVersion);const fresh=await lockOwner(client,owner,mode);
     if(fresh.auth_mode!=='opaque-v1'||Number(fresh.auth_version)!==authVersion)denied();
@@ -92,15 +92,16 @@ export function opaquePostgresMethods({pool,transaction,lockOwner,requireSession
       if(!row||Number(row.expires_at)<=Date.now())denied();return challengeRow(row);
     },
     checkOpaqueOwner(owner,authVersion,sessionHash){return transaction(client=>opaqueOwner(client,owner,authVersion,sessionHash));},
-    loginOpaque({ownerId,authVersion},value){return transaction(async client=>{const fresh=await opaqueOwner(client,ownerId,authVersion);await addSession(client,ownerId,value);return fresh;});},
+    async loginOpaque({ownerId,authVersion},value){await cleanupExpiredSessions();return transaction(async client=>{const fresh=await opaqueOwner(client,ownerId,authVersion);await addSession(client,ownerId,value);return fresh;});},
     recoveryVault(owner,authVersion,expectedRecoveryHash){
       digest(expectedRecoveryHash);return transaction(async client=>{const fresh=await opaqueOwner(client,owner,authVersion);if(fresh.recovery_auth_hash!==expectedRecoveryHash)denied();return read(client,owner);});
     },
-    registerOpaque({challenge,registrationRecord,vaultInput,recoveryAuthHash},value){
+    async registerOpaque({challenge,registrationRecord,vaultInput,recoveryAuthHash},value){
       binary(registrationRecord,192);digest(recoveryAuthHash);
       if(challenge.kind!=='register'||!challenge.ownerId||typeof challenge.username!=='string'||!/^[a-z0-9][a-z0-9._-]{2,63}$/.test(challenge.username))invalid();
       const name=challenge.payload?.name??challenge.username;if(typeof name!=='string'||!name.trim()||name.length>100)invalid();
       const accepted=validateVaultWrite(challenge.ownerId,vaultInput);if(accepted.expectedRevision!==0||vaultInput.keyEnvelope.version!==3)invalid();
+      await cleanupExpiredSessions();
       return transaction(async client=>{
         const now=new Date().toISOString();let fresh;
         try{fresh=(await client.query(`INSERT INTO drug_tracker.accounts(id,username,password_hash,name,created_at,auth_mode,auth_version,opaque_record,recovery_auth_hash)

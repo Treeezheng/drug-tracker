@@ -352,7 +352,8 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
     const expected=Date.parse(created)+86400_000;
     assert.equal(Number((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rows[0].expires_at),expected);
     const again=await openCloudPostgres(options);stores.push(again);
-    assert.equal(Number((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rows[0].expires_at),expected);
+    assert.equal((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rowCount,0);
+    assert.equal(await again.session(value.tokenHash),null);
     assert.equal((await again.accountByUsername(old.username)).id,old.id);
   });
   await t.test('global quota migration preserves accounts, sessions and vaults while new digests isolate shared budgets', async () => {

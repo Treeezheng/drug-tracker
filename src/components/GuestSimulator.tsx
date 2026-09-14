@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pill, Plus, ChevronLeft, ChevronRight, CalendarDays, Copy, X } from 'lucide-react';
 import { sources } from '../lib/catalog';
 import { upsertFavorite } from '../lib/favorites';
@@ -127,7 +127,8 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
     }catch(cause){if(live.current)setStorageError(`Device saving is unavailable. Continue without saving to keep this simulation in memory. ${cause instanceof Error?cause.message:''}`);}
     finally{if(live.current)setConsentBusy(false);}
   }
-  const range=guestDayWindow(date,days,profile.timeZone),scoped=scopeTimeline({actual:[],drafts,start:range.start,end:range.end,publishedOnly});
+  const range=useMemo(()=>guestDayWindow(date,days,profile.timeZone),[date,days,profile.timeZone]);
+  const scoped=useMemo(()=>scopeTimeline({actual:[],drafts,start:range.start,end:range.end,publishedOnly}),[drafts,range,publishedOnly]);
   return <div className="simple-shell guest-shell"><header className="app-header"><a href="#" className="brand" onClick={event=>{event.preventDefault();setPage('simulation');}}><Pill size={22}/><span>Drug Tracker</span></a><nav className="app-nav" aria-label="Main navigation"><button className={page==='simulation'?'active':''} aria-current={page==='simulation'?'page':undefined} onClick={()=>setPage('simulation')}>Dose Simulation</button><button onClick={onSignIn}>History</button><button className={page==='settings'?'active':''} aria-current={page==='settings'?'page':undefined} onClick={()=>setPage('settings')}>Settings</button></nav><div className="account-control"><button className="text-button" onClick={onSignIn}>Sign in</button><button className="button secondary small" onClick={onRegister}>Create account</button></div></header>
     <main><div className="page-title responsive-page-title"><h1>{page==='simulation'?'Dose Simulation':'Simulation settings'}</h1></div><p className="guest-storage-note">Guest simulation · {remember?'Saved unencrypted on this device.':'In memory only; refreshing clears this simulation.'} Account records are separate.</p>
       {(notice||error||storageError)&&<p className="notice" role={error||storageError?'alert':'status'}>{error||storageError||notice}</p>}

@@ -1,16 +1,22 @@
 import { isIP, SocketAddress } from 'node:net';
 import { CloudError } from './cloud-errors.mjs';
 
+/** Only the explicitly configured, same-host Caddy proxy may supply its client IP. */
+export function requireLoopbackProxy(req) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) throw new CloudError(403, 'The configured proxy must connect over loopback.');
+}
+
 /** Abuse quota identity only, never authentication. Heroku appends its observed IP on the right.
  * https://devcenter.heroku.com/articles/http-routing#heroku-headers
  * proxyMode is server configuration, never selected by a request header.
  */
 export function rateSource(req, proxyMode) {
   const forwarded = req.headers['x-forwarded-for'];
-  const address = proxyMode === 'heroku'
+  if (proxyMode === 'caddy-loopback') requireLoopbackProxy(req);
+  const address = proxyMode === 'caddy-loopback' ? req.headers['x-drug-client-ip'] : proxyMode === 'heroku'
     ? typeof forwarded === 'string' ? forwarded.split(',').at(-1).trim() : ''
     : req.socket.remoteAddress;
-  if (!address || !isIP(address)) throw new CloudError(400, 'The request source could not be verified.');
+  if (typeof address !== 'string' || !isIP(address)) throw new CloudError(400, 'The request source could not be verified.');
   // Canonicalize equivalent IPv6 strings so spelling cannot create additional quotas.
   return SocketAddress.parse(address.includes(':') ? `[${address}]:0` : `${address}:0`).address;
 }
