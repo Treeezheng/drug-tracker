@@ -93,29 +93,70 @@ function readEnvelope(input: unknown, expectedOwnerId: string, kind: 'data' | 'w
   return JSON.parse(JSON.stringify(value)) as VaultDataEnvelope | VaultKeyEnvelope;
 }
 
+/** Structural validation only; authentication still requires successful decryption. */
+export function cloneVaultEnvelopes(data: unknown, wrappedKey: unknown, expectedOwnerId: string): { dataEnvelope: VaultDataEnvelope; keyEnvelope: VaultKeyEnvelope } {
+  return { dataEnvelope: readEnvelope(data, expectedOwnerId, 'data'), keyEnvelope: readEnvelope(wrappedKey, expectedOwnerId, 'wrapped-key') };
+}
+
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+/** Bounded JSON snapshot for callers that must validate before serialization. No domain validation. */
+export function cloneVaultData(input: unknown): AppData { return boundedData(input); }
 function boundedData(input: unknown): AppData {
-  let visited = 0;
+  let visited = 0, jsonBytes = 0;
   const seen = new WeakSet<object>();
+  const tooLarge = () => new Error('Vault data exceeds 16 MB.');
+  function charge(bytes: number): void {
+    jsonBytes += bytes;
+    if (jsonBytes > VAULT_MAX_PLAINTEXT_BYTES) throw tooLarge();
+  }
+  function chargeString(value: string): void {
+    // Count the exact UTF-8 size of JSON.stringify's well-formed string encoding
+    // directly from UTF-16. Do not allocate escaped strings or per-field byte arrays.
+    const remaining = VAULT_MAX_PLAINTEXT_BYTES - jsonBytes;
+    let bytes = 2; // opening and closing quotes
+    if (bytes > remaining) throw tooLarge();
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index);
+      if (code === 0x22 || code === 0x5c) bytes += 2;
+      else if (code < 0x20) bytes += code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6;
+      else if (code < 0x80) bytes++;
+      else if (code < 0x800) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index++; }
+        else bytes += 6; // lone high surrogate becomes a JSON \uXXXX escape
+      } else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6;
+      else bytes += 3;
+      if (bytes > remaining) throw tooLarge();
+    }
+    charge(bytes);
+  }
   function copy(value: unknown, depth: number): JsonValue {
     if (++visited > 500_000 || depth > 32) throw new Error('Vault data is too deeply nested or has too many fields.');
-    if (value === null || typeof value === 'boolean') return value;
-    if (typeof value === 'number') { if (!Number.isFinite(value)) throw new Error('Invalid vault number.'); return value; }
-    if (typeof value === 'string') { if (value.length > 1_000_000) throw new Error('Vault text is too long.'); return value; }
+    if (value === null || typeof value === 'boolean') { charge(value === false ? 5 : 4); return value; }
+    if (typeof value === 'number') { if (!Number.isFinite(value)) throw new Error('Invalid vault number.'); charge(String(value).length); return value; }
+    if (typeof value === 'string') { if (value.length > 1_000_000) throw new Error('Vault text is too long.'); chargeString(value); return value; }
     if (typeof value !== 'object' || seen.has(value)) throw new Error('Vault data must be JSON serializable.');
     seen.add(value);
     try {
       if (Array.isArray(value)) {
         if (value.length > 50_000) throw new Error('Vault list is too long.');
+        charge(2 + Math.max(0, value.length - 1)); // brackets and commas
         return Array.from(value, child => copy(child, depth + 1));
       }
       const record = plainObject(value), entries = Object.entries(record);
       if (entries.length > 100) throw new Error('Vault object has too many fields.');
       const result: { [key: string]: JsonValue } = {};
+      charge(2); // braces
+      let included = 0;
       for (const [key, child] of entries) {
         if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('Unsafe vault field.');
         // Optional TypeScript fields follow JSON object semantics; no array values are dropped.
-        if (child !== undefined) result[key] = copy(child, depth + 1);
+        if (child !== undefined) {
+          charge((included++ ? 1 : 0) + 1); // comma, then colon
+          chargeString(key);
+          result[key] = copy(child, depth + 1);
+        }
       }
       return result;
     } finally { seen.delete(value); }

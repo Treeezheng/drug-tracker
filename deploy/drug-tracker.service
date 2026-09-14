@@ -1,0 +1,39 @@
+[Unit]
+Description=Drug Tracker encrypted cloud service
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=drug-tracker
+Group=drug-tracker
+WorkingDirectory=/opt/drug-tracker/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/drug-tracker/cloud.env
+ExecStartPre=/opt/node24/bin/node -e "if (Number(process.versions.node.split('.')[0]) !== 24) process.exit(1)"
+ExecStart=/opt/node24/bin/node /opt/drug-tracker/current/server/cloud.mjs start
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=40
+UMask=0077
+StateDirectory=drug-tracker
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/drug-tracker
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

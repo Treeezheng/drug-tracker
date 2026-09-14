@@ -1,0 +1,14 @@
+.cloud-gate { max-width: 440px; margin: 0 auto; padding: max(36px, 7vh) 20px 36px; }
+.cloud-gate > .brand { display: flex; justify-content: center; margin-bottom: 28px; }
+.cloud-login { padding: 28px; }
+.cloud-login > svg { color: var(--muted); }
+.cloud-login h1 { font-size: 24px; margin: 14px 0 16px; letter-spacing: -.5px; }
+.cloud-login p { font-size: 14px; line-height: 1.55; }
+.cloud-login .auth-form { margin-top: 0; }
+.cloud-login > .text-button { display: block; margin: 18px auto 0; }
+.cloud-gate-note { text-align: center; color: var(--muted); font-size: 12px; line-height: 1.9; margin: 24px 0; }
+.cloud-gate-note a { color: inherit; }
+.cloud-recovery-key { font-family: 'IBM Plex Mono', monospace; font-size: 14px; overflow-wrap: anywhere; min-height: 94px; resize: vertical; }
+.medication-name { min-width: 0; overflow-wrap: anywhere; }
+.medication-name .medication-brand { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: 4px; background: #eef1f4; color: #596471; font-size: 11px; line-height: 1.5; font-weight: 500; vertical-align: 1px; }
+@media(max-width: 480px) { .cloud-login { padding: 22px; } .cloud-login input { font-size: 16px; } }

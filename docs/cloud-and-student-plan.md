@@ -8,7 +8,7 @@
 
 **先申请 Azure for Students。DigitalOcean 的 GitHub 学生优惠已经结束，不再引导用户按旧教程兑换 $200。** GitHub Education Partnerships 的 Morgan Ersery 于 2026 年 7 月 7 日在官方社区置顶说明：最后兑换日为 7 月 31 日，剩余额度 8 月 1 日失效。当前 Pack 目录也已无 DigitalOcean，旧学生入口重定向首页。[GitHub 教育合作公告](https://github.com/orgs/community/discussions/201240)、[公告作者身份](https://github.com/morganersery1)、[当前 Pack](https://education.github.com/pack)、[原 DO 入口](https://www.digitalocean.com/github-students)
 
-**当前成品仍是本机版，尚未具备完整 E2EE，也尚不能直接公开到互联网。** 本机密码是访问控制；SQLite、修改历史、浏览器缓存和 JSON 备份仍有明文。密钥模块的开发不等于全部存储、同步和恢复已加密。完整边界见 [版本与加密说明](./editions-and-encryption.md)。
+**本机版继续可用；独立云版的加密、认证和浏览器入口正在完成联调，尚未公网部署。** 本机密码是访问控制，原 SQLite、历史和浏览器缓存仍有明文。云版使用独立数据库及构建，不能把本机服务直接放到公网。云端当前只保存现存记录的加密快照，不继承本机全部纠正历史。完整边界见 [版本与加密说明](./editions-and-encryption.md)。
 
 ## 现在实际可以办理的学生申请
 
@@ -65,41 +65,41 @@ Oracle 当前额度是 2 OCPU / 12 GB，不是旧文章中的 4 OCPU / 24 GB；�
 
 ## 最小服务器结构与配置
 
-下面是**完整云安全与 E2EE 改造后的计划**，现在不能据此直接公开现有服务。
+下面已对应独立云入口 `server/cloud.mjs` 的实际路径；部署文件已准备，Azure / HTTPS 实机验收仍未完成。
 
 ```text
 Mac / iPhone：解密、图表、历史、导出
   └─ HTTPS：https://treeezh.com/drug
       └─ Caddy：证书和反向代理
-          └─ Node 24：127.0.0.1:4310，认证与密文同步
+          └─ Node 24：127.0.0.1:4312，认证与密文同步
               └─ SQLite：密文、版本、最少必要同步元数据
 ```
 
 Azure 学生 VM 和普通 VPS 均可用这个结构。`/drug` 是应用路径；前端、API 同源，先不增加 CDN、邮件登录、托管数据库或容器编排。域名 DNS 配置到服务器，路径由反向代理处理；DNS 本身不配置 `/drug`。
 
-路径必须全链路一致：构建的 Vite base 为 `/drug/`，前端 API 请求为 `/drug/api/...`，`/drug` 跳转 `/drug/`，Caddy 对这个路径剥掉 `/drug` 后交给内部 Node。配置的浏览器 Origin 仍是 **`https://treeezh.com`**，不含路径。根域其他内容不应被该应用的 SPA fallback 覆盖；同源其他页面也必须可信，因为 IndexedDB / JavaScript 权限不按 `/drug` 隔离。这些均为待实施的部署契约。
+路径必须全链路一致：构建的 Vite base 为 `/drug/`，前端 API 请求为 `/drug/api/...`，`/drug` 跳转 `/drug/`，Caddy **保留完整 `/drug` 前缀**后交给内部 Node，不能用会剥掉前缀的 `handle_path`。配置的浏览器 Origin 是 **`https://treeezh.com`**，不含路径。根域其他内容不能被应用 SPA fallback 覆盖；同源其他页面也必须可信，因为浏览器脚本和存储权限不按 `/drug` 隔离。[Caddy 路径处理](https://caddyserver.com/docs/caddyfile/directives/handle)
 
 若后续选 DigitalOcean：**Create → Droplet → Bundled → Basic / Regular → 1 GiB**，选择靠近加州且该规格可用的 San Francisco 区域，Ubuntu 24.04 LTS x64，数量 1，SSH key，基础周备份。避免误选独立计价的 v5、托管数据库或附加卷；创建前检查总价。[官方创建流程](https://docs.digitalocean.com/products/droplets/how-to/create/)
 
 若选 Google：单独项目与结算账户，Compute Engine、Oregon `us-west1`、非 Spot `e2-micro`、Ubuntu x64、最多 30 GB **standard persistent disk**、一个公网 IPv4；在账单中确认抵扣。默认 balanced disk、额外 VM、Cloud NAT 不应误算成免费。[免费规则](https://docs.cloud.google.com/free/docs/free-cloud-features)
 
-运行采用独立非 root 服务用户，数据目录独立于发布目录，限制为该用户可读写。Node 24 + systemd 足够。前端在 Mac / CI 构建后复制产物；Linux 依赖在 Linux 安装，不能把 Mac 的 `node_modules` 直接复制过去。发布不上传本机 `data/`、WAL 或明文 JSON 备份。
+运行采用独立非 root 服务用户，数据目录独立于发布目录，限制为该用户可读写。Node 24 + systemd 足够。前端在独立源代码目录构建后复制产物；当前没有启用 CI。不能把 Mac 的 `node_modules` 直接复制过去；当前云入口仅依赖 Node 内置模块和 `vault-store.mjs`。发布不上传本机 `data/`、WAL 或明文 JSON 备份。
 
-防火墙：SSH 限自己的管理来源；对外仅开放 HTTPS 443 以及证书验证 / 跳转所需 80，**4310 不对外开放**。按主机或标签实际绑定规则。[云防火墙规则示例](https://docs.digitalocean.com/products/networking/firewalls/how-to/configure-rules/)
+防火墙：SSH 限自己的管理来源；对外仅开放 HTTPS 443 以及证书验证 / 跳转所需 80，**4310、4312、5173 不对外开放**。按主机或标签实际绑定规则。[云防火墙规则示例](https://docs.digitalocean.com/products/networking/firewalls/how-to/configure-rules/)
 
-Caddy 同机反代至 `127.0.0.1:4310`，保留真实 Host / Origin。域名 A / AAAA 指向实际可达地址，证书目录持久化；Caddy 自动签发与续期，不需要购买额外 SSL 证书。[自动 HTTPS](https://caddyserver.com/docs/automatic-https)、[代理与转发头](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
+Caddy 同机反代至 `127.0.0.1:4312`，保留真实 Host / Origin。域名 A / AAAA 指向实际可达地址，证书目录持久化；Caddy 自动签发与续期，不需要购买额外 SSL 证书。[自动 HTTPS](https://caddyserver.com/docs/automatic-https)、[代理与转发头](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
 
-**不要删除 Origin、伪造 localhost Host 或允许所有来源来绕过当前 403。** 应增加独立云配置、精确 HTTPS 来源校验、Secure cookie 和受控账户初始化。默认本机模式继续仅 loopback。拟新增环境变量及加密 schema 当前均未集成；本轮未添加可能被误认为“已可安全公开”的 Docker / Caddy 部署文件。
+**不要删除 Origin、伪造 localhost Host 或允许所有来源来绕过 403。** 独立云入口现已有精确 HTTPS 来源校验、Secure cookie 和一次性账户初始化；默认本机入口继续仅 loopback。已准备 [Caddy 模板](../deploy/Caddyfile)、[systemd 单位](../deploy/drug-tracker.service)、[非秘密配置示例](../deploy/.env.example) 与 [Azure VM 操作指南](./azure-vm-deployment.md)。这些文件尚未安装或运行，不能代替真实 VM 验收。
 
 ## 上线顺序
 
 1. GitHub 只发布源代码、锁文件、许可证、说明与合成测试；检查忽略列表和待提交内容。开源不等于公开数据库。
-2. 完成密钥模块及存储 / 同步 / 历史 / 缓存 / 备份集成，通过篡改、错误密语、恢复和多设备冲突测试。
-3. 完成 HTTPS 来源、Secure cookie、CSRF、代理信任、限流和账户初始化；独立测试库验证，不迁入正式库。
+2. 完成密文客户端与主界面联调，通过篡改、错误密语、恢复和多设备冲突测试。首版在线使用且只保留现存记录快照，不能声称离线缓存和历史版本已实现。
+3. 对已实现的 HTTPS 来源、Secure cookie、CSRF、限流和账户初始化进行真实代理验收；独立测试库验证，不迁入正式库。
 4. 在 Mac 与 iPhone Safari 验证解锁、离线、重新连接、冲突、锁定、换机恢复和导出；检查数据库、WAL、网络及 IndexedDB 无健康明文或 vault 密钥。
 5. 建立 SQLite 一致性备份与恢复流程；机器快照不能代替恢复验证，直接复制主数据库可能遗漏 WAL 提交。备份加密数据及密钥包装信息，用户另存客户端恢复密钥。
 6. 通过后在浏览器内加密迁移真实记录，逐项核对；本机原始数据保留，不自动删除。
 
-当前外部等待是 **Azure 学生账户获批与可用规格确认**；实现阻塞是完整 E2EE 和云安全边界。申请可以先做，购买 / 公网部署不必先于代码验证。
+当前外部等待是 **Azure 学生账户获批与可用规格确认**；技术上仍需完成客户端整体验收、真实 HTTPS / VM 联调和恢复演练。申请可以先做，购买 / 公网部署不必先于代码验证。
 
 旧 [Azure Retail Prices 快照](./azure-retail-price-snapshot.json) 保留作此前方案的研究记录，不是当前默认架构成本。

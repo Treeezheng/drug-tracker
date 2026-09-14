@@ -1,0 +1,17 @@
+# Deployment template, not installed or running.
+# If treeezh.com already has a site block, merge only @drug and its handle into it.
+# Keep the existing personal-site handler; do not replace its configuration.
+treeezh.com {
+	@drug path /drug /drug/*
+	handle @drug {
+		# cloud.mjs consumes /drug itself. Do not use handle_path or rewrite.
+		# The incoming Host and Origin must remain intact.
+		reverse_proxy 127.0.0.1:4312
+	}
+
+	# No personal website has been configured in this template.
+	# Replace this fallback only with the real, separately reviewed site handler.
+	handle {
+		respond "Not found" 404
+	}
+}

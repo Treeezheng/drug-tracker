@@ -9,6 +9,12 @@ export class ApiError extends Error {
   }
 }
 
+export interface CloudTransport { request<T>(path: string, method?: string, body?: unknown, ownerId?: string): Promise<T>; }
+let cloudMode = false;
+let cloudTransport: CloudTransport | null = null;
+export function configureCloudTransport(transport: CloudTransport | null): void { cloudMode = true; cloudTransport = transport; setActiveAccount(null); }
+export function isCloudEdition(): boolean { return cloudMode; }
+
 interface Queued { id: string; path: string; body: unknown; method: 'PUT' | 'DELETE'; }
 export interface PendingChange { id: string; path: string; body: unknown; method: 'PUT' | 'DELETE'; }
 interface LocalState { cache: AppData | undefined; queue: Queued[]; cacheEpoch: string | undefined; }
@@ -126,6 +132,14 @@ async function request<T>(path: string, method = 'GET', body?: unknown, ownerId?
 
 /** Pass ownerId explicitly from the calling view for private operations. */
 export async function api<T>(path: string, method = 'GET', body?: unknown, ownerId?: string): Promise<T> {
+  if (cloudMode) {
+    if (!cloudTransport) throw new Error('Unlock your encrypted records first.');
+    const generation = accountGeneration;
+    const data = await cloudTransport.request<T>(path, method, body, ownerId ?? activeAccount ?? undefined);
+    if (path === '/session' && generation === accountGeneration) setActiveAccount((data as { user: User | null }).user?.id ?? null);
+    if (path === '/auth/logout') setActiveAccount(null);
+    return data;
+  }
   const isSession = path === '/session';
   const isAuth = path.startsWith('/auth/');
   const owner = ownerId ?? activeAccount ?? undefined;
@@ -163,6 +177,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, owner
 
 /** Return the visible saved-plus-pending view; never overwrite a queued edit. */
 export async function cacheData(userId: string, data: AppData): Promise<AppData> {
+  if (cloudMode) return structuredClone(data);
   return changeState(userId, (state) => {
     state.cache = structuredClone(data);
     return withPending(state.cache, state.queue);
@@ -170,11 +185,13 @@ export async function cacheData(userId: string, data: AppData): Promise<AppData>
 }
 
 export async function cachedData(userId: string): Promise<AppData | undefined> {
+  if (cloudMode) return undefined;
   const { cache, queue } = await readState(userId);
   return cache || queue.length ? withPending(cache || emptyData(), queue) : undefined;
 }
 
 export async function queueMutation(userId: string, path: string, body: unknown, method = 'PUT'): Promise<void> {
+  if (cloudMode) throw new Error('An internet connection is required to save. Your entry has not been saved; keep this page open and retry.');
   if (!mutationPath(path) || !['PUT', 'DELETE'].includes(method) || (path === '/profile' && method !== 'PUT')) {
     throw new Error('This action cannot be saved to the offline queue. Reconnect and try again.');
   }
@@ -187,16 +204,19 @@ export async function queueMutation(userId: string, path: string, body: unknown,
 }
 
 export async function queueCount(userId: string): Promise<number> {
+  if (cloudMode) return 0;
   return (await readState(userId)).queue.length;
 }
 
 export async function pendingChanges(userId: string): Promise<PendingChange[]> {
+  if (cloudMode) return [];
   if (activeAccount && activeAccount !== userId) throw new ApiError('The active account changed. Sign in to review these pending changes.', 401);
   return structuredClone((await readState(userId)).queue);
 }
 
 /** Call only after the user explicitly chooses to keep the server version. */
 export async function discardPendingChange(userId: string, queueId: string): Promise<void> {
+  if (cloudMode) return;
   if (activeAccount && activeAccount !== userId) throw new ApiError('The active account changed. Sign in before resolving these pending changes.', 401);
   await changeState(userId, (state) => {
     if (!state.queue.some((item) => item.id === queueId)) return;
@@ -208,6 +228,7 @@ export async function discardPendingChange(userId: string, queueId: string): Pro
 }
 
 export async function syncQueue(userId: string): Promise<void> {
+  if (cloudMode) return;
   const existing = syncing.get(userId);
   if (existing) return existing;
   const run = async () => {
@@ -237,6 +258,7 @@ export async function syncQueue(userId: string): Promise<void> {
 
 /** Only explicit account deletion should discard pending health records. */
 export async function clearCache(userId: string, discardPending = false): Promise<void> {
+  if (cloudMode) return;
   await changeState(userId, (state) => {
     if (state.queue.length && !discardPending) throw new Error('Pending changes remain on this device. Sync or export them before signing out.');
     state.cache = undefined;

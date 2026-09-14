@@ -70,6 +70,8 @@ type VaultKeyEnvelope = {
 | 解密前的 UTF-8 明文 | 不超过 16,000,000 字节 |
 | JSON 结构 | 深度不超过 32；遍历不超过 500,000 个值；单数组不超过 50,000 项；单对象不超过 100 字段；单字符串不超过 1,000,000 UTF-16 code units |
 
+加密前在遍历输入时累计最终 JSON 的准确 UTF-8 字节预算，包括键名、引号、逗号、冒号、括号、数字，以及控制字符/引号/反斜杠/孤立 surrogate 的 JSON 转义。超过 16 MB 即停止，不先拼接巨型 JSON，也不为每段字符串额外生成转义副本或 UTF-8 byte array。完成后的整体编码仍保留最终字节检查。
+
 数据明文是单个 `AppData` JSON，包含 profile、doses、scenarios、favorites、checkins 和 inventory。旧数据没有 inventory 时保留其缺省状态。所有这些集合的数据一起加密，不在信封外单独存储药名、剂量、症状、备注或时区。可选对象属性 `undefined` 按标准 JSON 语义省略；数组不静默丢值。循环引用、非有限数、非普通对象和 `__proto__` / `constructor` / `prototype` 字段被拒绝。
 
 本模块只验证安全的 JSON / 集合结构，**不代替应用的药物、时间、revision、ID 和备份语义校验**。未来恢复流程必须在将解密结果应用到状态前调用完整的应用 schema 校验。认证 tag 成功只表明密钥与认证数据匹配，不证明药量或医学模型正确。
@@ -112,8 +114,10 @@ AAD 为以下有序数组 `JSON.stringify` 后的 UTF-8 字节：
 
 ## 已完成测试
 
-`node --import tsx --test tests/vault-crypto.test.ts`：**13 项通过，0 失败**，运行环境为本机 Node 24 Web Crypto。
+`node --import tsx --test tests/vault-crypto.test.ts`：**15 项通过，0 失败**，运行环境为本机 Node 24 Web Crypto。
 
 覆盖随机 256 位密钥、canonical 恢复码导入导出、所有 AppData 集合与中文/emoji、精确小数量和 revision、并发加密的新 nonce、原生 Web Crypto 独立 AAD 解密验证、错误密钥/口令、ciphertext/tag/IV 篡改、修改 ownerId 后的密码学绑定、用途替换、KDF 降级与过高工作量、长度与字段限制、密钥重新包装、Unicode 无隐式归一化、JSON 深度/大小/危险字段，以及经过认证但内容非法的明文。
+
+额外回归验证两项加密前内存边界：200 个条目共享同一个 1 MB 备注时，在进入根对象 `JSON.stringify` 前即拒绝；含中文、emoji、控制字符、转义键名、孤立 surrogate 和多种 primitive 的边界数据，准确允许 16,000,000 字节，并在多一个字节时提前拒绝。测试拦截根序列化，不实际构造 200 MB JSON。该检查修复了快速复核发现的“累计大小检查晚于巨型字符串分配”问题。
 
 随机 nonce 的有限样本测试不证明数学上永不碰撞。本次还有另一代理只读快速审阅协议与源码，未发现阻塞性算法使用问题；这不是正式独立安全审计，也不是完整端到端加密产品验收。

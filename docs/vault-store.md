@@ -1,6 +1,6 @@
 # Standalone encrypted-vault storage
 
-Status on 13 September 2026: implemented and tested as an **unconnected storage primitive**. `server/index.mjs` does not import this module and exposes no encrypted-vault route. The current application's SQLite records, browser cache/outbox, and ordinary JSON/CSV/PDF exports remain plaintext. This module does not establish that the deployed application provides end-to-end encryption.
+Status on 13 September 2026: implemented first as an independent storage primitive, then connected only to the separate `server/cloud.mjs` service. The original local `server/index.mjs` does not import this module. Its SQLite records, browser cache/outbox, and ordinary JSON/CSV/PDF exports remain plaintext. See [the cloud API contract and actual test status](./cloud-api.md); adding this module does not establish that a public deployment has been verified.
 
 ## Contract
 
@@ -31,7 +31,7 @@ Binary fields must use canonical, unpadded base64url. The IV decodes to exactly 
 
 These are **structural checks**, not proof of encryption or authenticity. The server cannot detect a well-formed, tampered ciphertext, validate its medication contents, or establish that a wrapped key decrypts the data. The browser's authenticated decryption must verify those properties and then validate the application domain schema before restoring data. Public metadata such as owner ID, timestamps, envelope sizes, and KDF parameters remain visible.
 
-Vault passphrases and raw vault recovery keys must stay in the client. They are separate from the existing server authentication password and server-generated account recovery code. The module accepts neither. A complete product integration still needs authenticated transport, browser key lifecycle, encrypted cache/outbox decisions, conflict/recovery flows, domain validation after decryption, and migration/export UX before it can claim an encrypted cloud experience.
+Vault passphrases and raw vault recovery keys must stay in the client. They are separate from the existing server authentication password and server-generated account recovery code. The module accepts neither. The separate cloud API now supplies authenticated owner binding. Browser key lifecycle, conflict/recovery behavior, domain validation after decryption, migration/export UX, and deployment need their own integration verification; this storage module alone cannot establish those properties.
 
 ## Executed verification
 

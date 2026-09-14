@@ -14,7 +14,7 @@ Three pages, with English interface text:
 
 - **Dose Simulation:** a reference chart, independent dose rows, and a collapsed Discomfort check-in. Add a medication from favorites, choose its package strength and quantity, then explicitly mark it **Taken**. New entries default to the current local time. Planned doses do not count toward consumption or history.
 - **History:** medication totals and daily bars, selected date ranges, dose corrections, symptom counts and CSV export. Symptom comparisons show same-day records, not causation. Medication PDF exports contain dose records; CSV also includes separate symptom rows.
-- **Settings:** categorized favorites, time zone and clock preferences, supply receipts and estimated stock, local account, backup, privacy and project information.
+- **Settings:** categorized favorites with multiple strengths per medication, time zone and clock preferences, supply receipts and estimated stock, account, backup, privacy and project information.
 
 The catalog contains 50 medication/formulation entries, including Ritalin IR 5 mg, Adderall IR 5 mg and metformin. Quantities preserve fractions: 1.5 tablets of a 10 mg package records 15 mg and consumes 1.5 tablets. Half-tablet buttons are limited to reviewed products and strengths; unusual real administrations can still be recorded without applying an unsupported standard curve.
 
@@ -50,7 +50,7 @@ The application includes no analytics, advertising or remote font requests. Open
 
 Use **Settings → Account & data → Full backup** for a restorable JSON archive. Backups may contain prior revisions and deleted-record content; CSV, PDF and JSON downloads are unencrypted files. Keep them private. If copying the database directly, stop the service first so that pending SQLite WAL writes are not omitted.
 
-Read the [privacy statement](PRIVACY.md). Local authentication recovery and future encryption-key recovery are different mechanisms.
+Read the [privacy statement](PRIVACY.md). Local authentication recovery and cloud encryption-key recovery are different mechanisms.
 
 ## Medical scope
 
@@ -75,17 +75,21 @@ Browser checks and known limits are recorded in [interface QA](docs/qa-interface
 
 ## Web edition
 
-The target address is **https://treeezh.com/drug**. Build assets for that path with:
+The target address is **https://treeezh.com/drug**. The cloud edition has a separate server and build:
 
 ```sh
-DRUG_BASE_PATH=/drug/ pnpm build
+DRUG_EDITION=cloud pnpm build
 ```
 
-The local server understands both `/api` and `/drug/api`; this path support does not enable public cloud access. Public HTTPS origins, cloud authentication and end-to-end encrypted sync must be completed and verified before using the cloud edition for health records.
+This sets `/drug/` as the asset base and marks the build as cloud. `server/cloud.mjs` rejects local-edition builds and local databases. It listens only on loopback behind an HTTPS proxy. See the [Azure deployment guide](docs/azure-vm-deployment.md) and [deployment templates](deploy/).
 
-Encryption and ciphertext-storage foundations are being developed separately. Standalone module tests do not mean the existing application, browser cache, outbox or backup flows are fully end-to-end encrypted.
+An operator creates the server account once. The browser then uses a **separate encryption password** to protect a random vault key. Records are encrypted with AES-256-GCM before upload; the server stores ciphertext and the wrapped key. The recovery key can unlock records after signing in, but cannot replace server authentication. Losing both the encryption password and recovery key loses access to the encrypted records.
 
-Deployment and student account guidance: [cloud plan](docs/cloud-and-student-plan.md). The domain has been purchased; server setup is pending. The old DigitalOcean GitHub student offer ended in 2026; current student guidance uses Azure for Students, subject to Microsoft eligibility verification.
+This first cloud edition requires an internet connection to save. Decrypted records and keys are held in memory while unlocked; there is no persistent browser record cache or offline outbox. **Lock** clears them without needing a network connection. Reloading, locking or session expiry discards unsaved form entries. Concurrent saves are checked against the vault revision; conflicts do not silently replace another device’s records.
+
+Cloud **Current backup** exports an unencrypted snapshot of current records. It does not contain correction history or deleted records. Full local archives with audit history are rejected on cloud import instead of silently dropping that history; keep the original archive. There is no automatic upload of local records. Server backups can retain older ciphertext; account removal is an operator action in this initial single-owner release.
+
+The domain has been purchased; **the public site is not deployed yet**. Azure student registration, a server, DNS, production HTTPS and production backup/restore verification remain pending. Local integration checks are not a production security audit. The [cloud plan](docs/cloud-and-student-plan.md) uses Azure for Students, subject to Microsoft eligibility verification; the old DigitalOcean GitHub student offer ended in 2026.
 
 ## Research and project origin
 

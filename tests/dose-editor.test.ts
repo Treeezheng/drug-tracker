@@ -20,12 +20,12 @@ test('a blank row can receive a precise time before medication without inventing
   assert.equal(dated.productId,'');assert.equal(dated.amountMg,'');assert.equal(dated.administeredAt,'2026-09-13T15:03:00Z');
   assert.match(doseInputError(dated),/Choose a medication/);assert.equal(original.administeredAt,'');
   const html=render(dated,['adderall-ir']);
-  assert.match(html,/<option value="" selected="">Choose medication/);assert.match(html,/Adderall IR/);assert.doesNotMatch(html,/Ritalin IR/);
+  assert.match(html,/<option value="" selected="">Choose medication/);assert.match(html,/Adderall IR/);assert.doesNotMatch(html,/<option value="ritalin"/);
 });
 
 test('favorites narrow the selector but preserve the current known or historical medication',()=>{
   const known=render(newDose('ritalin','5'),['adderall-ir']);
-  assert.match(known,/Ritalin IR/);assert.match(known,/Adderall IR/);assert.doesNotMatch(known,/Concerta/);
+  assert.match(known,/Methylphenidate IR · Ritalin/);assert.match(known,/Adderall IR/);assert.doesNotMatch(known,/Concerta/);
   const historical={...newDose('ritalin','5'),productId:'old-product',productName:'Recorded medicine',formulation:'Recorded form',packageStrength:'5',manufacturer:'Recorded manufacturer'};
   const html=render(historical,[]);
   assert.match(html,/Recorded medicine/);assert.match(html,/Recorded form/);assert.match(html,/Recorded manufacturer/);assert.match(html,/Historical · D/);

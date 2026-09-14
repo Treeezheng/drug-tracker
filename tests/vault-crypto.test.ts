@@ -149,3 +149,49 @@ test('authenticated invalid JSON or unsafe inner objects fail generically after 
     await rejected(decryptVault(envelope, key, ownerA));
   }
 });
+
+test('aggregate oversized data is rejected before constructing the root JSON string', async t => {
+  const key = await createVaultKey(), originalStringify = JSON.stringify;
+  const sharedNote = 'x'.repeat(1_000_000);
+  // Reuse one existing string; do not allocate or serialize a real 200 MB fixture.
+  const huge: AppData = { ...empty(), checkins: Array.from({ length: 200 }, (_, i) => ({ id: `aggregate-${i}`, date: '2026-09-13', note: sharedNote })) };
+  let reachedSerialization = false;
+  t.mock.method(JSON, 'stringify', (value: unknown) => {
+    if (value && typeof value === 'object' && 'profile' in value && 'doses' in value) {
+      reachedSerialization = true;
+      throw new Error('A giant root JSON allocation must not be attempted.');
+    }
+    return originalStringify(value);
+  });
+  await assert.rejects(encryptVault(huge, key, ownerA), /16 MB/);
+  assert.equal(reachedSerialization, false);
+});
+
+test('the early JSON budget counts UTF-8, escape sequences, keys, punctuation and primitive values exactly', async t => {
+  const key = await createVaultKey(), originalStringify = JSON.stringify;
+  const special = '"\\\b\f\n\r\t\u0000\u001f\u007f\u0080\u07ff\u0800中😀\u2028\u2029\ud800x\udc00';
+  const data: AppData = { ...empty(), checkins: [
+    { id: 'special', date: '2026-09-13', note: special, ['复杂\n"字段']: [null, true, false, -0, 1e30, 1e-8], omitted: undefined } as AppData['checkins'][number],
+    ...Array.from({ length: 16 }, (_, i) => ({ id: `padding-${i}`, date: '2026-09-13', note: '' })),
+  ] };
+  // The independent platform serializer only sees this small baseline, not a giant payload.
+  let remaining = VAULT_MAX_PLAINTEXT_BYTES - Buffer.byteLength(originalStringify(data), 'utf8');
+  for (let i = 1; i < data.checkins.length; i++) {
+    const count = Math.min(remaining, 1_000_000); data.checkins[i].note = 'a'.repeat(count); remaining -= count;
+  }
+  assert.equal(remaining, 0);
+  let reachedSerialization = false;
+  t.mock.method(JSON, 'stringify', (value: unknown) => {
+    if (value && typeof value === 'object' && 'profile' in value && 'doses' in value) {
+      reachedSerialization = true;
+      throw new Error('Exact boundary accepted for serialization.');
+    }
+    return originalStringify(value);
+  });
+  await assert.rejects(encryptVault(data, key, ownerA), /Exact boundary accepted/);
+  assert.equal(reachedSerialization, true);
+  reachedSerialization = false;
+  data.checkins[0].note += 'a'; // Exactly one byte beyond the allowed total.
+  await assert.rejects(encryptVault(data, key, ownerA), /16 MB/);
+  assert.equal(reachedSerialization, false);
+});

@@ -18,11 +18,19 @@ A correction or soft deletion may retain earlier record content in revision hist
 
 Deleting a local account removes its application records, revision rows and sessions from the active database and requests clearing the app’s browser cache. It does not erase files you downloaded, other copies, machine backups or previously exported data. Logical deletion is not a guarantee of forensic erasure from storage hardware.
 
-## Cloud edition in development
+## Cloud edition
 
-The planned address is https://treeezh.com/drug. At this stage, independent encryption and ciphertext-storage modules do not provide complete end-to-end encryption for the daily application. Cloud authentication, encrypted browser storage, synchronization, backups and recovery need integration and verification before health records are uploaded.
+The planned public address is https://treeezh.com/drug. A separate encrypted cloud edition is implemented for deployment on the owner’s server; the public server is not deployed yet. The local edition described above keeps its existing storage behavior.
 
-The intended design keeps the record-decryption key on client devices and stores only encrypted record payloads on the owner’s server. Hosting providers can still observe connection metadata such as IP addresses, request times and encrypted payload sizes. Password recovery must not silently imply recovery of an unavailable encryption key. The final cloud behavior and retention details will be documented before release.
+In the cloud edition, the browser encrypts the full record snapshot with a random AES-256-GCM key before upload. A separate encryption password wraps that key in the browser. The server stores encrypted record payloads and the wrapped key. The encryption password and recovery key are not sent to the server. Server sign-in uses a different account password, verified against a password hash, and an HttpOnly session cookie. Account identifiers, the configured owner name, password hash, session hashes, expiry times, vault revision and timestamps are not end-to-end encrypted.
+
+While unlocked, record contents and encryption keys are held in browser memory. This edition does not persist records in IndexedDB, local storage or an offline queue. Saving requires a connection. Locking works without a connection. Locking, reloading, session expiry or closing the page can discard unsaved entries. Cloud creation starts empty and does not automatically copy local records.
+
+The current cloud vault holds current records only. Corrections replace the current record and deletion removes it from that snapshot; there is no in-app cloud audit archive. Server or machine backups may retain older encrypted snapshots. Downloaded CSV, PDF and Current backup JSON files are unencrypted. A full local backup with correction or deletion history is rejected on cloud import; preserve the original file. Account removal and backup retention are managed by the server operator in this initial single-owner edition.
+
+Hosting and network providers can observe connection metadata including IP addresses, request times and ciphertext sizes. HTTPS protects transport. Client-side encryption does not protect an unlocked browser from malicious scripts, a compromised device, or a compromised server that serves changed application code. The `/drug` path shares an origin with the rest of treeezh.com; that root website and its scripts must also be trusted. The application includes no analytics, advertising or remote fonts, and does not send records to OpenAI.
+
+Resetting a server account password does not recover the record encryption key. If both the encryption password and recovery key are lost, the operator cannot decrypt the records. Production deployment, HTTPS and backup/restore verification remain pending; module and local integration tests are not an independent security audit.
 
 ## Public source code
 
