@@ -5,7 +5,7 @@ import type { CloudVaultSnapshot } from '../src/lib/cloud-client';
 import { ApiError } from '../src/lib/api';
 import { decryptVault, exportRecoveryKey, importRecoveryKey, unwrapVaultKey } from '../src/lib/vault-crypto';
 import { parseBackup } from '../src/lib/reports';
-import type { AppData, Dose, Profile } from '../src/lib/types';
+import type { AppData, Checkin, Dose, Profile } from '../src/lib/types';
 import { newDose, updateDose } from '../src/components/DoseEditor';
 import { freshGuestWorkspace } from '../src/lib/guest-workspace';
 import { prepareGuestTransfer } from '../src/lib/guest-transfer';
@@ -217,6 +217,24 @@ test('every current collection and historical snapshot round-trips encrypted; on
   recovered.lock();
   assert.deepEqual(await recovered.unlockVault({ vaultPassphrase: passphrase }), original);
   assert.deepEqual(await recovered.request('/session'), { user: { id: 'owner1', name: 'Account name', email: '' } });
+});
+
+test('feeling check-ins save, reopen and export encrypted without losing new choices or accepting contradictory selections', async () => {
+  const { client, remote, recoveryKey } = await ready();
+  const checkin: Checkin = { id: 'feelings', date: '2026-09-13', recordedAt: '2026-09-13T15:00:00Z', timeZone: profile.timeZone, symptoms: ['concentrated', 'high-heart-rate', 'refreshed'], note: '' };
+  const saved = await client.request<Checkin>('/checkins/feelings', 'PUT', checkin, 'owner1');
+  assert.partialDeepStrictEqual(saved, { ...checkin, revision: 1 });
+  const before = puts(remote).length;
+  for (const symptoms of [['concentrated', 'none'], ['high-heart-rate', 'none'], ['refreshed', 'refreshed']]) {
+    await assert.rejects(client.request('/checkins/feelings', 'PUT', { ...saved, symptoms }, 'owner1'));
+  }
+  assert.equal(puts(remote).length, before);
+  for (const selection of checkin.symptoms!) assert.equal(JSON.stringify(puts(remote)).includes(selection), false);
+  const reopened = createCloudClient({ fetch: remote.fetcher });
+  await reopened.session();
+  assert.deepEqual((await reopened.unlockVault({ recoveryKey })).checkins, [saved]);
+  const exported = await reopened.request('/export');
+  assert.deepEqual(parseBackup(JSON.stringify(exported)).checkins, [saved]);
 });
 
 test('all mutations are serialized and retain independent records, exact quantities and revisions', async () => {

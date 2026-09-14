@@ -34,7 +34,7 @@ test('CSV keeps concise medication fields and exact decimals with separate self-
   assert.equal(doseRow[header.indexOf('Total mg')], '1.00000001');
   assert.equal(doseRow[header.indexOf('Status')], 'Taken');
   assert.equal(symptomRow[header.indexOf('Status')], 'Self-reported');
-  assert.equal(symptomRow[header.indexOf('Discomfort')], 'Headache');
+  assert.equal(symptomRow[header.indexOf('Feeling / discomfort')], 'Headache');
   assert.equal(symptomRow[header.indexOf('UTC time')], '2026-09-13T18:00:00Z');
   for (const column of ['Medication', 'Formulation', 'Quantity', 'Quantity unit', 'Total mg', 'Amount details']) assert.equal(symptomRow[header.indexOf(column)], '');
   assert.ok(!rows.flat().includes('dose-1')); assert.ok(!rows.flat().includes('planned'));
@@ -49,7 +49,7 @@ test('symptom-only CSV includes full report-zone days and does not synthesize mi
   assert.deepEqual(rows.map(row => row[header.indexOf('UTC time')]), ['2026-09-13T07:00:00Z', '2026-09-14T06:59:59Z']);
   assert.equal(rows[0][header.indexOf('Date')], '2026-09-13');
   assert.equal(rows[1][header.indexOf('Time')], '23:59');
-  assert.equal(rows[1][header.indexOf('Discomfort')], 'No discomfort');
+  assert.equal(rows[1][header.indexOf('Feeling / discomfort')], 'No discomfort');
   assert.equal(readCsv(csvString([], profile, '2026-09-13', '2026-09-13', [])).length, 1);
 });
 
@@ -66,7 +66,7 @@ test('CSV keeps legacy observations in notes without inventing symptoms, a clock
   const legacy: Checkin = { id: 'legacy', date: '2026-09-13', focus: '3', sleepQuality: '4', note: '' };
   const [header, row] = readCsv(csvString([], profile, '2026-09-13', '2026-09-13', [legacy]));
   assert.equal(row[header.indexOf('Status')], 'Self-reported');
-  for (const field of ['Discomfort', 'Time', 'Time zone', 'UTC time']) assert.equal(row[header.indexOf(field)], '');
+  for (const field of ['Feeling / discomfort', 'Time', 'Time zone', 'UTC time']) assert.equal(row[header.indexOf(field)], '');
   assert.match(row[header.indexOf('Notes')], /Focus \(legacy\): 3/);
   assert.match(row[header.indexOf('Notes')], /Sleep quality \(legacy\): 4/);
   assert.match(row[header.indexOf('Notes')], /time and time zone were not recorded/);
@@ -95,6 +95,15 @@ test('backup rejects unknown, empty, duplicate or contradictory tags and inconsi
   ]) assert.throws(() => parseBackup(backup([{ ...checkin('invalid'), ...patch }])));
 });
 
+test('feelings and high heart rate retain their labels and selections through CSV and backup restore', () => {
+  const records = [checkin('feelings', undefined, { symptoms: ['concentrated', 'refreshed'] }), checkin('heart-rate', undefined, { symptoms: ['high-heart-rate'] })];
+  const [header, ...rows] = readCsv(csvString([], profile, '2026-09-13', '2026-09-13', records));
+  assert.ok(header.includes('Feeling / discomfort'));
+  assert.deepEqual(rows.map(row => row[header.indexOf('Feeling / discomfort')]), ['Concentrated; Refreshed', 'High heart rate']);
+  assert.ok(rows.every(row => row[header.indexOf('Status')] === 'Self-reported'));
+  assert.deepEqual(parseBackup(backup(records)).checkins, records);
+});
+
 test('concise CSV preserves exact tablet and liquid amounts, separate combination components, and nominal patch units',()=>{
   const recorded=(id:string,strength:string,quantity:string):Dose=>({...updateDose(newDose(id,strength),{quantity},profile.timeZone),administeredAt:'2026-09-13T15:00:00Z',status:'actual'});
   const input=[recorded('ritalin','10','1.5'),recorded('metformin-solution','100','0.100000001'),recorded('azstarys','26.1/5.2','1'),recorded('xelstrym','4.5','1'),recorded('adderall-ir','10','1.5')];
@@ -114,6 +123,6 @@ test('CSV rejects invalid saved mass/time instead of exporting a misleading zero
   }
   const allTags=checkin('tags',undefined,{symptoms:['anxiety','palpitations','other','dry-mouth']});
   const [header,row]=readCsv(csvString([],profile,'2026-09-13','2026-09-13',[allTags]));
-  assert.equal(row[header.indexOf('Discomfort')],'Anxiety; Palpitations; Other; Dry mouth');
+  assert.equal(row[header.indexOf('Feeling / discomfort')],'Anxiety; Palpitations; Other; Dry mouth');
   assert.deepEqual(parseBackup(backup([allTags])).checkins,[allTags]);
 });

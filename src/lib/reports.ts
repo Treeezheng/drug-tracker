@@ -114,7 +114,7 @@ export function filterCheckins(checkins: Checkin[], from: string, to: string, ti
 
 export function csvString(doses: Dose[], profile: Profile, from: string, to: string, checkins: Checkin[] = []): string {
   const header = ['Date', 'Time', 'Time zone', 'UTC time', 'Medication', 'Formulation', 'Strength', 'Strength unit',
-    'Quantity', 'Quantity unit', 'Total mg', 'Amount details', 'Status', 'Discomfort', 'Notes'];
+    'Quantity', 'Quantity unit', 'Total mg', 'Amount details', 'Status', 'Feeling / discomfort', 'Notes'];
   const events: { time: number; id: string; row: (string | number)[] }[] = [];
   for (const dose of filterDoses(doses, from, to, profile.timeZone)) {
     instant(dose.administeredAt, 'Administration time');

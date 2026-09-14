@@ -10,18 +10,22 @@ export const SYMPTOMS = [
   { id: 'anxiety', label: 'Anxiety' },
   { id: 'palpitations', label: 'Palpitations' },
   { id: 'other', label: 'Other' },
+  { id: 'concentrated', label: 'Concentrated' },
+  { id: 'high-heart-rate', label: 'High heart rate' },
+  { id: 'refreshed', label: 'Refreshed' },
   { id: 'none', label: 'No discomfort' },
 ] as const;
 export type SymptomId = typeof SYMPTOMS[number]['id'];
-export const PRIMARY_SYMPTOM_IDS: readonly SymptomId[] = ['low-appetite', 'sleep-trouble', 'headache', 'nausea', 'anxiety', 'none'];
+export const PRIMARY_SYMPTOM_IDS: readonly SymptomId[] = ['concentrated', 'refreshed', 'low-appetite', 'sleep-trouble', 'headache', 'nausea', 'anxiety', 'high-heart-rate', 'none'];
+export const POSITIVE_SYMPTOM_IDS: readonly SymptomId[] = ['concentrated', 'refreshed', 'none'];
 export const SYMPTOM_IDS: readonly string[] = SYMPTOMS.map(item => item.id);
 export const SYMPTOM_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SYMPTOMS.map(item => [item.id, item.label]));
 
 export function symptomSelectionError(values: readonly string[]): string {
-  if (!values.length) return 'Choose a symptom or No discomfort.';
-  if (values.some(value => !SYMPTOM_IDS.includes(value))) return 'Review the unrecognized symptom selection.';
-  if (new Set(values).size !== values.length) return 'Each symptom can be selected only once.';
-  if (values.includes('none') && values.length > 1) return 'No discomfort cannot be combined with a symptom.';
+  if (!values.length) return 'Choose a feeling, symptom or No discomfort.';
+  if (values.some(value => !SYMPTOM_IDS.includes(value))) return 'Review the unrecognized selection.';
+  if (new Set(values).size !== values.length) return 'Each choice can be selected only once.';
+  if (values.includes('none') && values.length > 1) return 'No discomfort cannot be combined with another choice.';
   return '';
 }
 
