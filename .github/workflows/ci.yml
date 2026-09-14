@@ -140,6 +140,6 @@ jobs:
           name: drug-cloud-${{ github.sha }}
           path: verified-build
       - name: Attest verified main build manifest
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: verified-build/build-info.json
