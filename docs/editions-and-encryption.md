@@ -6,12 +6,12 @@
 
 | 能力 | 本机版 | 当前云版代码 |
 |---|---|---|
-| 页面 | Dose Simulation、History、Settings | 解锁后使用同样三个页面 |
+| 页面 | Dose Simulation、History、Settings | 默认访客演算；注册并解锁后使用三个账户页面 |
 | 入口 | 默认构建；server/index.mjs；loopback 4310 | 显式 cloud 构建；server/cloud.mjs；loopback 4312 |
-| 登录 | 初次设密码；单账户随后只输密码 | 管理者一次初始化的用户名 / 账户密码，服务端 scrypt |
+| 登录 | 初次设密码；单账户随后只输密码 | 公开注册用户名 / 账户密码，服务端 scrypt；每账户独立 owner |
 | 解密 | 无客户端健康数据库加密 | 服务器登录后，浏览器另用加密密语或客户端恢复密钥解锁 |
 | 服务器健康记录 | SQLite 中为明文 | 每账户一个完整 AppData 密文快照和包装后的数据密钥 |
-| 浏览器缓存 / 队列 | IndexedDB 明文缓存与离线队列 | 健康记录和密钥仅在内存；当前没有持久离线缓存 |
+| 浏览器缓存 / 队列 | IndexedDB 明文缓存与离线队列 | 解锁账户记录/密钥仅内存；访客演算另存明文 localStorage |
 | 保存 | 可暂存设备，随后同步本机服务 | 在线 CAS 保存；失败不回退到本机明文队列 |
 | 纠正与删除历史 | 服务端保留版本 / 删除信息，完整备份可包含 | 当前只保存现存记录，未实现云端修订历史 / 删除历史 |
 | 用户下载 | 明文 CSV、PDF、完整 JSON 备份 | 明文 CSV、PDF、现存记录 JSON 备份，界面明确披露 |
@@ -22,13 +22,19 @@
 
 ## 云端已经实现的边界
 
-- `server/cloud.mjs` 要求单独绝对数据库路径、精确 HTTPS origin、受控初始化账户和带 cloud 标记的静态构建；拒绝已含本机表的数据库。启动只绑定 127.0.0.1。不改造或复用本机健康数据库。
-- 云 API 位于 /drug/api。没有公开注册、HTTP bootstrap、本机明文记录 API 或明文恢复入口。初始账户通过一次 CLI 环境输入创建；现阶段没有云账户密码重置工具。
+- `server/cloud.mjs` 要求单独绝对数据库路径、精确 HTTPS origin 和带 cloud 标记的静态构建；拒绝已含本机表的数据库。启动只绑定 127.0.0.1。不改造或复用本机健康数据库。
+- 云 API 位于 /drug/api，公开注册创建独立账户；每账户一个独立 owner ID 与密文 vault。可选 CLI bootstrap 只允许空库初始化第一个账户，不是创建所有账户的必经步骤。没有 HTTP bootstrap、本机明文记录 API 或云账户密码重置 / 恢复入口。注册不要求邮箱，也不提供身份或邮箱核验。
 - 认证使用带盐 scrypt；会话 token 在服务端存散列。生产 cookie 为 `__Secure-drug_cloud_session`，包含 Secure、HttpOnly、SameSite=Strict 和 Path=/drug/。cookie Path 不能作为同源代码的安全隔离。
-- 服务端严格匹配 Host；所有写请求都要求与配置相同的 Origin，拒绝跨站 Fetch Metadata；不以不可信转发头决定允许来源。读取 vault 也要求会话和匹配的 owner header。代理场景采用单账户全局登录限流与并发验证上限，不靠伪造的来源 IP 分配额度。
+- 服务端严格匹配 Host；所有写请求都要求与配置相同的 Origin，拒绝跨站 Fetch Metadata；不以不可信转发头决定允许来源。读取 vault 也要求会话和匹配的 owner header。登录与注册各有服务级全局限流，共享密码散列并发上限，不靠伪造的来源 IP 分配额度；具体参数见云 API 文档。
 - `server/vault-store.mjs` 仅检查权限调用方传入的 owner、信封结构、长度和版本，以事务把数据 / 包装密钥成对保存。whole-vault revision CAS 防止正常并发写覆盖。服务端不能验证药名或数量的真实性，解密后的内容校验在客户端。
 - `src/lib/cloud-client.ts` 对调用者输入先限量复制、做应用 schema 校验，再加密上传；密钥及解密记录留在 closure 中。串行保存、明确冲突与相同密文的重试确认，避免把健康明文写进本机离线队列。关闭或锁定页面会放弃未确认的内存编辑，用户需要留在页面处理保存失败。
 - `src/components/CloudGate.tsx` 分开服务器登录、首次加密密语设置、解锁和恢复密钥展示；云构建由 src/main.tsx 显式选择。页面卸载 / 恢复时重新锁定，异步操作以 generation 检查防止恢复已丢弃的明文状态。完整 UI 和生命周期仍需真实浏览器验证。
+
+## 访客演算不属于加密账户记录
+
+访客使用独立演算界面与 versioned localStorage key，保存模拟 dose、常用药和演算设置；包含用户填写的备注，存储为明文。浏览器重新加载后可以恢复，使用同一浏览器 profile 的其他人或同源脚本可能读取。Clear simulation 清除当前浏览器中的访客工作区，不保证删除设备备份中的旧副本。
+
+访客只做模拟，不发健康数据 API 请求，也不能把演算直接写成 Taken、症状或库存历史。需要账户功能时进入登录 / 注册；创建新的加密 vault 不传入访客数据。正式账户退出 / 锁定先卸载账户数据，访客工作区可以另行保留。账户数据仅内存的保证不能扩大为“整个网站从不使用 localStorage”，也不能把“不上传访客数据”表述为“访客数据已端到端加密”。
 
 正式地址为 **https://treeezh.com/drug**。API / 构建资源前缀为 /drug/，浏览器 Origin 是 https://treeezh.com，不含路径。/drug 不能隔离同源其他页面的 IndexedDB、脚本或更广作用域的 Service Worker；整个域名的代码都需可信。[同源策略](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Same-origin_policy)、[Cookie 属性与前缀](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie)
 

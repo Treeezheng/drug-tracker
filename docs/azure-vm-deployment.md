@@ -13,7 +13,7 @@
 
 云 API 是 `/drug/api`，Vite base 是 `/drug/`，浏览器 Origin 是 `https://treeezh.com`。Node 已处理完整前缀，Caddy **必须保留 `/drug`**。`handle_path` 会剥掉前缀，因此这里采用 `handle`。原始 Host / Origin 也应保留，不能伪造成 localhost 来绕过来源校验。[Caddy handle](https://caddyserver.com/docs/caddyfile/directives/handle)、[reverse_proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
 
-只有云入口 `server/cloud.mjs` 用于这次部署。`pnpm start` 仍启动本机版 `server/index.mjs`，不可用于公网。云入口只绑定 `127.0.0.1`，使用单独数据库、一次性服务器账户初始化、Secure cookie 和精确来源校验；拒绝本机版数据库及未标记为 cloud 的静态构建。
+只有云入口 `server/cloud.mjs` 用于这次部署。`pnpm start` 仍启动本机版 `server/index.mjs`，不可用于公网。云入口只绑定 `127.0.0.1`，使用单独数据库、公开注册的独立账户、Secure cookie 和精确来源校验；拒绝本机版数据库及未标记为 cloud 的静态构建。以下自管 VM 是一种部署选项，不代表已创建资源。
 
 `/drug` 不能隔离同源其他页面的脚本、存储或 Service Worker 权限。因此 `treeezh.com` 根网站也必须可信，不能托管不可信用户脚本。模板没有填入个人网站内容：新站根路径返回 404；若已有个人网站，只合并药物应用路由，保留原有根站配置。
 
@@ -83,9 +83,9 @@ sudo install -m 0644 -o root -g root deploy/drug-tracker.service /etc/systemd/sy
 
 `cloud.env` 只有四个非秘密参数：数据库绝对路径、HTTPS origin、4312 端口和静态目录。服务密码、加密密语、恢复密钥都不能写入这里。`CLOUD_ALLOW_INSECURE_LOOPBACK` 在 HTTPS 部署中保持未设置。
 
-## 5. 只执行一次的服务器账户初始化
+## 5. 可选：预先创建第一个服务器账户
 
-后端没有公开注册或 HTTP bootstrap。现有 CLI 只从短暂环境变量读取账户密码，命令行参数不接受密码。它仅允许空云数据库创建一个账户；重复执行会拒绝，不会覆盖账户。用户名为 3–64 位 ASCII 字母、数字、点、下划线或连字符，首位为字母或数字；账户密码为 10–256 个字符。
+公开注册可以在服务启动后通过网页创建独立账户，因此本步骤可跳过，空云数据库可直接启动。CLI bootstrap 仍只允许在空库中预先建立第一个账户，重复执行会拒绝；它不限制之后通过注册创建其他账户，也不提供 HTTP bootstrap。CLI 只从短暂环境变量读取账户密码，命令行参数不接受密码。用户名为 3–64 位 ASCII 字母、数字、点、下划线或连字符，首位为字母或数字；账户密码为 10–256 个字符。
 
 进入一次临时子 shell，下面的 `read` 会交互询问；不要把真实密码直接写进命令、聊天、配置或 Git。此密码只用于服务器登录，浏览器稍后另设不同的加密密语。
 
@@ -135,9 +135,9 @@ Caddy 根据真实域名自动申请和续期证书，需要 DNS 正确、证书
 
 ## 7. 上线验收与恢复
 
-使用独立合成记录验证：`/drug` 跳转 `/drug/`；根网站保留原行为；资源、字体、Privacy、API 均处于正确路径；无公开注册；跨源写入失败；cookie 具有 Secure / HttpOnly / SameSite=Strict / Path=/drug/。Mac 和 iPhone Safari 分别验证登录、设置不同加密密语、恢复密钥解锁、保存、刷新、并发冲突、断网与重试、退出及重新打开。
+使用独立合成记录验证：`/drug` 跳转 `/drug/`；根网站保留原行为；资源、字体、Privacy、API 均处于正确路径；访客无需账号即可演算，公开注册创建独立账号且不上传访客草稿；跨源写入失败；cookie 具有 Secure / HttpOnly / SameSite=Strict / Path=/drug/。Mac 和 iPhone Safari 分别验证注册、登录、设置不同加密密语、恢复密钥解锁、保存、刷新、并发冲突、断网与重试、退出及重新打开。至少两个合成账户分别验证读取、保存及跨标签页账号切换不会混用另一账户的 vault。
 
-当前云客户端采用在线保存、内存解密，不持久化浏览器健康缓存；关闭页面可能丢弃尚未确认的编辑。当前 vault / JSON 备份是现存记录快照，不保留以前的纠正版本或已删除历史；CSV / PDF / JSON 下载均为用户主动生成的明文。检查网络、数据库、WAL 和浏览器存储是否出现合成药名 / 笔记 / 加密密语 / 恢复密钥，不能仅以算法测试通过作为完整链路验收。
+当前登录账户采用在线保存、内存解密，不持久化账户明文缓存；关闭页面可能丢弃尚未确认的编辑。独立访客演算有明文 localStorage，必须明确显示并支持 Clear simulation；不得把访客模式描述为加密。当前 vault / JSON 备份是现存记录快照，不保留以前的纠正版本或已删除历史；CSV / PDF / JSON 下载均为用户主动生成的明文。使用与访客不同的合成药名 / 笔记，检查网络、数据库、WAL 和浏览器存储不得出现账户健康明文或加密密语 / 恢复密钥，不能仅以算法测试通过作为完整链路验收。
 
 备份需要完整云 SQLite（包括同一 owner 的账户、包装密钥、密文和版本），同时由用户在服务器之外保存客户端恢复密钥。可用 SQLite `.backup` 创建一致性快照，不能只复制正在写入的主文件而忽略 WAL；先在临时路径验证恢复，不覆盖唯一原库。[SQLite CLI 备份](https://sqlite.org/cli.html#special_commands_to_sqlite3_dot_commands_)
 

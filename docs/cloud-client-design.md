@@ -4,11 +4,13 @@
 
 ## 接口与流程
 
-`createCloudClient({apiBase?: string, fetch?: typeof fetch})` 默认使用同源 `/drug/api`，提供 `session()`、`login(username,password)`、`loadVault()`、`setupVault(vaultPassphrase,initialData?)`、`unlockVault({vaultPassphrase}|{recoveryKey})`、`lock()`、`logout()`、`getState()` 和兼容现有业务接口的 `request(path,method,body,ownerId)`。
+`createCloudClient({apiBase?: string, fetch?: typeof fetch})` 默认使用同源 `/drug/api`，提供 `session()`、`register(username,password,name?)`、`login(username,password)`、`loadVault()`、`setupVault(vaultPassphrase,initialData?)`、`unlockVault({vaultPassphrase}|{recoveryKey})`、`lock()`、`logout()`、`getState()` 和兼容现有业务接口的 `request(path,method,body,ownerId)`。
 
-典型顺序为 session/login → loadVault → setup 或 unlock → 将 request 挂入云版业务 API。setup 默认建立空数据，不读取或迁移本机账户。setup 返回一次 recoveryKey；恢复密钥就是完整数据加密密钥，必须私下妥善保管。模块不保存登录密码，因此无法在以后每次解锁时检测密语是否恰好等于登录密码。界面必须要求独立密语，在本次登录仍知道登录密码时可额外拒绝二者相同。
+典型顺序为 session/register/login → loadVault → setup 或 unlock → 将 request 挂入云版业务 API。register 只发送账户字段，setup 默认建立空数据，不读取或迁移本机账户或访客演算。setup 返回一次 recoveryKey；恢复密钥就是完整数据加密密钥，必须私下妥善保管。模块不保存登录密码，因此无法在以后每次解锁时检测密语是否恰好等于登录密码。界面必须要求独立密语，在本次登录仍知道登录密码时可额外拒绝二者相同。
 
 服务端收到的健康资料只有整个 AppData 的密文：profile、doses、scenarios（含 comparisonDoses）、favorites、checkins、inventory 一起序列化。不把账号登录密码、会话或原始恢复密钥加入 AppData。所有 vault 请求绑定登录响应中的稳定 owner ID，使用 `X-Dose-Owner`；密文 AAD 同样绑定该 ID。`credentials: same-origin`、`cache: no-store`。适配层不调用 IndexedDB、localStorage、Cache API 或明文 outbox。
+
+这一存储保证只针对加密账户适配层。云构建的独立访客演算器会将模拟草稿与演算偏好保存在明文 localStorage；它不经此适配层，不会自动上传到新注册或现有账户。页面必须清楚区分访客工作区和正式账户记录。
 
 ## 保存、冲突与断线
 
@@ -26,7 +28,7 @@ PUT 使用完整快照替换并保留创建时间；删除的 patch removal、�
 
 ## 锁定边界
 
-generation 标记阻止异步 crypto/network 完成后把已经锁定的数据重新放回内存，排队的旧操作也会拒绝。`logout()` 在网络注销前立即本地锁定；若远端注销失败，明确说明服务器会话可能仍有效。界面也必须在成功和失败两条退出路径卸载 App，因为界面已经得到的旧返回值无法由适配层收回。
+generation 标记阻止异步 crypto/network 完成后把已经锁定的数据重新放回内存，排队的旧操作也会拒绝。独立 authQueue 串行登录、注册和注销的完整网络请求；取消界面不会让迟到 Set-Cookie 越过后来的认证请求，尚未开始且已取消的认证不会发送。session 读取等待先前认证。这个队列作用于同一客户端实例；跨标签页仍由 owner header、服务端 401 与 Gate 检测 owner 变化后锁定来处理。`logout()` 在网络注销前立即本地锁定；若远端注销失败，明确说明服务器会话可能仍有效。界面也必须在成功和失败两条退出路径卸载 App，因为界面已经得到的旧返回值无法由适配层收回。
 
 `lock()` 只清除此模块持有的密钥和健康数据引用；JavaScript 不保证内存物理擦除，也不能收回其他组件复制过的值。生产 HTTPS、登录保护、来源策略、静态构建完整性以及实际设备界面测试仍由集成层负责。恶意部署的 JavaScript、XSS 或有权限扩展可能窃取解锁后的数据；AES-GCM 与 CAS 不提供恶意服务器回滚检测。原语依据与版本边界见 `docs/vault-crypto-design.md`。
 
@@ -34,4 +36,4 @@ generation 标记阻止异步 crypto/network 完成后把已经锁定的数据�
 
 专用测试覆盖完整数据与中文往返、真实 DoseEditor patch→IR 更正、四行并发保存、医学 schema 拒绝、全库和记录 revision 冲突、写前断线、写后丢失确认、重试幂等、锁定中的已发送和排队操作、错误密语/恢复元数据、导入合并与完整历史拒绝、favorite 多规格、退出清钥及离线退出。Node WebCrypto 与模拟云传输测试不能替代真实浏览器及生产服务器的集成验证。
 
-本模块专用测试 24 项通过，原语测试 15 项通过。此数量仅对应上述模块，不代表整个应用已完成全部测试。
+本模块原有专用测试 24 项通过，注册/认证串行专项另 6 项通过；原语测试 15 项通过。此数量仅对应上述模块，不代表整个应用已完成全部测试。

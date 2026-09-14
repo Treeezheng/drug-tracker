@@ -11,6 +11,7 @@ export interface CloudVaultSnapshot { ownerId: string; revision: number; dataEnv
 export interface CloudClient extends CloudTransport {
   session(): Promise<CloudUser | null>;
   login(username: string, password: string): Promise<CloudUser>;
+  register(username: string, password: string, name?: string): Promise<CloudUser>;
   loadVault(): Promise<{ exists: boolean; revision: number }>;
   setupVault(vaultPassphrase: string, initialData?: AppData): Promise<{ data: AppData; recoveryKey: string }>;
   unlockVault(secret: { vaultPassphrase: string } | { recoveryKey: string }): Promise<AppData>;
@@ -83,6 +84,9 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
   let user: CloudUser | null = null, snapshot: CloudVaultSnapshot | null = null, loaded = false;
   let key: CryptoKey | null = null, data: AppData | null = null, generation = 0;
   let queue: Promise<unknown> = Promise.resolve();
+  // Serialize cookie-changing requests even after the caller locks/cancels. A late
+  // Set-Cookie from an old login or logout must settle before the next auth request.
+  let authQueue: Promise<unknown> = Promise.resolve();
   type Pending = { signature: string; expectedRevision: number; dataEnvelope: VaultDataEnvelope; keyEnvelope: VaultKeyEnvelope; candidate: AppData; result: unknown };
   let pending: Pending | null = null;
   type PendingSetup = { key: CryptoKey; candidate: AppData; dataEnvelope: VaultDataEnvelope; keyEnvelope: VaultKeyEnvelope; recoveryKey: string };
@@ -105,6 +109,11 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     queue = run.catch(() => undefined);
     return run;
   }
+  function serialAuth<T>(token: number, task: () => Promise<T>): Promise<T> {
+    const run = authQueue.then(() => { check(token); return task(); });
+    authQueue = run.catch(() => undefined);
+    return run;
+  }
   async function wire(path: string, method = 'GET', body?: unknown, ownerId?: string): Promise<Record<string, unknown>> {
     let response: Response;
     try {
@@ -122,7 +131,9 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
   }
   function lock(): void { generation++; key = null; data = null; pending = null; pendingSetup = null; }
   async function session(): Promise<CloudUser | null> {
-    const token = generation, result = await wire('/session'); check(token);
+    const token = generation;
+    await authQueue; check(token);
+    const result = await wire('/session'); check(token);
     const next = readUser(result.user);
     if (next?.id !== user?.id) { lock(); loaded = false; snapshot = null; }
     user = next; return structuredClone(user);
@@ -130,10 +141,22 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
   async function login(username: string, password: string): Promise<CloudUser> {
     lock(); user = null; snapshot = null; loaded = false;
     const token = generation;
-    const result = await wire('/auth/login', 'POST', { username, password }); check(token);
-    user = readUser(result.user);
-    if (!user) throw new ApiError('Sign-in did not return an account.', 502);
-    return structuredClone(user);
+    return serialAuth(token, async () => {
+      const result = await wire('/auth/login', 'POST', { username, password }); check(token);
+      user = readUser(result.user);
+      if (!user) throw new ApiError('Sign-in did not return an account.', 502);
+      return structuredClone(user);
+    });
+  }
+  async function register(username: string, password: string, name?: string): Promise<CloudUser> {
+    lock(); user = null; snapshot = null; loaded = false;
+    const token = generation;
+    return serialAuth(token, async () => {
+      const result = await wire('/auth/register', 'POST', { username, password, ...(name === undefined ? {} : { name }) }); check(token);
+      user = readUser(result.user);
+      if (!user) throw new ApiError('Registration did not return an account.', 502);
+      return structuredClone(user);
+    });
   }
   function loadVault() { return serial(async token => {
     const ownerId = requireOwner();
@@ -201,12 +224,14 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     // Local privacy must not depend on connectivity. The host view must unmount
     // its own previously returned data on both successful and failed sign-out.
     lock(); const token = generation;
-    try { await wire('/auth/logout', 'POST', {}, ownerId); check(token, ownerId); }
-    catch (error) {
-      check(token, ownerId);
-      throw new ApiError('This device is locked. Server sign-out could not be confirmed; the server session may still be active.', error instanceof ApiError ? error.status : 0);
-    }
-    user = null; snapshot = null; loaded = false;
+    return serialAuth(token, async () => {
+      try { await wire('/auth/logout', 'POST', {}, ownerId); check(token, ownerId); }
+      catch (error) {
+        check(token, ownerId);
+        throw new ApiError('This device is locked. Server sign-out could not be confirmed; the server session may still be active.', error instanceof ApiError ? error.status : 0);
+      }
+      user = null; snapshot = null; loaded = false;
+    });
   }
   function acceptPending(remote: CloudVaultSnapshot, proposed: Pending): void {
     snapshot = remote; data = proposed.candidate; pending = null;
@@ -329,6 +354,6 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       return await save(validated, result, signature, owner, token) as T;
     });
   }
-  return { session, login, loadVault, setupVault, unlockVault, lock, logout, request,
+  return { session, login, register, loadVault, setupVault, unlockVault, lock, logout, request,
     getState: () => ({ user: structuredClone(user), locked: !key || !data, vaultExists: loaded ? snapshot !== null : null, revision: snapshot?.revision ?? 0 }) };
 }

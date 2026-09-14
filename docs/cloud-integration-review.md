@@ -2,6 +2,8 @@
 
 2026-09-13，独立代码审查。范围为 `server/cloud.mjs`、`server/vault-store.mjs`、`src/lib/vault-crypto.ts`、`src/lib/cloud-client.ts`、`src/components/CloudGate.tsx` 及对应测试；没有修改这些实现文件。此报告不是外部密码学审计或真实设备视觉测试。
 
+范围更新：本报告的 46 项结果来自公开注册 / 访客演算加入之前的版本，保留为历史检查记录。当前多账户与访客边界需同时阅读 [版本与加密边界](./editions-and-encryption.md) 及 [访客 / 注册交叉检查](./guest-registration-review.md)，不能把这里的单账户 bootstrap 检查当作新版多账户验收。
+
 发现的一项 P2 已由文件负责人修复：`logout()` 原先等待网络注销成功后才清除本地密钥 / 记录，因此断网时退出会留下已解锁页面。现在客户端先锁定，Gate 在成功和失败时都清除敏感状态并卸载记录界面；失败信息明确服务器会话可能仍有效。专项测试覆盖离线注销后导出被拒绝，以及恢复网络后的独立解锁。
 
 本次未找到其他需立即修改的具体阻塞问题。核对重点：

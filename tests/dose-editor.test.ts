@@ -20,12 +20,12 @@ test('a blank row can receive a precise time before medication without inventing
   assert.equal(dated.productId,'');assert.equal(dated.amountMg,'');assert.equal(dated.administeredAt,'2026-09-13T15:03:00Z');
   assert.match(doseInputError(dated),/Choose a medication/);assert.equal(original.administeredAt,'');
   const html=render(dated,['adderall-ir']);
-  assert.match(html,/<option value="" selected="">Choose medication/);assert.match(html,/Adderall IR/);assert.doesNotMatch(html,/<option value="ritalin"/);
+  assert.match(html,/<option value="" selected="">Choose medication/);assert.match(html,/<option value="adderall-ir">Mixed amphetamine salts IR<\/option>/);assert.doesNotMatch(html,/<option value="ritalin"/);
 });
 
 test('favorites narrow the selector but preserve the current known or historical medication',()=>{
   const known=render(newDose('ritalin','5'),['adderall-ir']);
-  assert.match(known,/Methylphenidate IR · Ritalin/);assert.match(known,/Adderall IR/);assert.doesNotMatch(known,/Concerta/);
+  assert.match(known,/<option value="ritalin" selected="">Methylphenidate IR<\/option>/);assert.match(known,/<option value="adderall-ir">Mixed amphetamine salts IR<\/option>/);assert.doesNotMatch(known,/Concerta/);
   const historical={...newDose('ritalin','5'),productId:'old-product',productName:'Recorded medicine',formulation:'Recorded form',packageStrength:'5',manufacturer:'Recorded manufacturer'};
   const html=render(historical,[]);
   assert.match(html,/Recorded medicine/);assert.match(html,/Recorded form/);assert.match(html,/Recorded manufacturer/);assert.match(html,/Historical · D/);
@@ -39,7 +39,9 @@ test('choosing a new formulation replaces old package and model assumptions, the
   assert.equal(changed.assumptions,undefined);assert.equal(changed.removalAt,undefined);assert.equal(changed.unusual,false);assert.equal(changed.id,original.id);
   const preferred=updateDose(changed,{packageStrength:'750',quantity:'2'},zone);
   assert.equal(preferred.amountMg,'1500');assert.equal(preferred.ingredients?.[0].amountMg,'1500');
-  assert.throws(()=>updateDose(changed,{packageStrength:'1000'},zone),/must be reviewed/);
+  const custom=updateDose(changed,{packageStrength:'1000'},zone);
+  assert.equal(custom.packageStrength,'1000');assert.equal(custom.amountMg,'1000');
+  assert.throws(()=>updateDose(changed,{packageStrength:'1e3'},zone),/positive decimal/);
   assert.throws(()=>newDose('missing-product'),/Unknown/);
 });
 

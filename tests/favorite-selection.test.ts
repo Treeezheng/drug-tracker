@@ -95,17 +95,19 @@ test('a failed first addition cannot remove existing strengths', async () => {
   assert.deepEqual(pending.map(change => change.type), ['save', 'remove']);
 });
 
-test('picker markup presents multiple checked strength chips and one IR heading with distinct brand labels', () => {
+test('picker markup presents multiple checked strength chips and one IR heading and one strength row across brand and generic', () => {
   const html = renderToStaticMarkup(createElement(FavoritePicker, {
     favorites: [favorite('five'), favorite('ten', '10'), favorite('generic', '10', { productId: 'methylphenidate-ir' })],
     onSave: () => {}, onRemove: () => {}, onClose: () => {},
   }));
   assert.equal((html.match(/<h4>Methylphenidate IR<\/h4>/g) || []).length, 1);
-  for (const label of ['Methylphenidate IR · Ritalin 5 mg', 'Methylphenidate IR · Ritalin 10 mg', 'Methylphenidate IR · Generic 10 mg']) {
+  for (const label of ['Methylphenidate IR 5 mg', 'Methylphenidate IR 10 mg']) {
     const input = html.match(new RegExp(`<input[^>]*aria-label="${label}"[^>]*>`));
     assert.ok(input, `Missing ${label}`); assert.match(input[0], /checked=""/);
   }
-  assert.match(html, /3 strengths selected/);
+  assert.match(html, /2 strengths selected/);
+  assert.equal((html.match(/aria-label="Methylphenidate IR 10 mg"/g) || []).length, 1);
+  assert.match(html, /<h4>Methylphenidate IR<\/h4><small class="fp-brand">Ritalin<\/small>/);
   assert.match(html, /aria-label="Search brand or ingredient"/);
   assert.doesNotMatch(html, /Preferred strength|<select/);
 });

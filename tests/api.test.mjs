@@ -636,3 +636,65 @@ test('favorite duplicates converge across repeated adds, legacy cleanup, deletio
   assert.equal(merged.data.data.favorites.find(row => row.id === 'strength-20').quantity, '1', 'Merge must preserve the existing preference rather than replace it with a duplicate.');
   assert.ok((await b.request('/api/export')).data.tombstones.some(row => row.id === 'merged-duplicate'));
 });
+
+test('custom package strengths and nine-decimal combinations persist and restore without catalog replacement or brand ID merging', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'dose-custom-package-'));
+  let service = await start(join(dir, 'synthetic.sqlite'));
+  const a = client(() => service.url), b = client(() => service.url);
+  t.after(async () => { await service.stop(); await rm(dir, { recursive: true, force: true }); });
+  await a.request('/api/auth/register', 'POST', { email: 'custom-a@example.test', password: PASSWORD });
+  await b.request('/api/auth/register', 'POST', { email: 'custom-b@example.test', password: PASSWORD });
+  const favorites = [
+    { id: 'custom-brand', productId: 'ritalin', strength: '7.5', packageStrength: '7.5', quantity: '1.5' },
+    { id: 'custom-generic', productId: 'methylphenidate-ir', strength: '7.500000000', packageStrength: '7.500000000', quantity: '0.5' },
+    { id: 'custom-combination', productId: 'azstarys', strength: '26.123456789', packageStrength: '26.123456789/5.200000001', quantity: '1' },
+  ];
+  for (const favorite of favorites) {
+    const result = await a.request(`/api/favorites/${favorite.id}`, 'PUT', favorite);
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    for (const [field, value] of Object.entries(favorite)) assert.equal(result.data[field], value);
+  }
+  const equivalent = await a.request('/api/favorites/equivalent-brand', 'PUT', { ...favorites[0], id: 'equivalent-brand', strength: '7.500', packageStrength: '7.500000000' });
+  assert.equal(equivalent.status, 200);
+  assert.equal(equivalent.data.id, 'custom-brand');
+  assert.equal(equivalent.data.packageStrength, '7.5');
+  for (const changes of [
+    { strength: '7.5000000001', packageStrength: '7.5000000001' },
+    { strength: '7.5', packageStrength: '7.5/0' },
+    { strength: '7.5', packageStrength: '8/2' },
+    { strength: '7.5', packageStrength: '7.5/2.0000000001' },
+  ]) assert.equal((await a.request('/api/favorites/invalid-custom', 'PUT', { ...favorites[0], id: 'invalid-custom', ...changes })).status, 400);
+  const doses = favorites.map((favorite, index) => ({
+    ...DOSE, id: `dose-${favorite.id}`, productId: favorite.productId, strength: favorite.strength, packageStrength: favorite.packageStrength,
+    quantity: favorite.quantity, amountMg: ['11.25', '3.75', '26.123456789'][index],
+    ingredients: index === 2 ? [
+      { name: 'Synthetic first combination ingredient', strengthMg: '26.123456789', amountMg: '26.123456789', unit: 'mg' },
+      { name: 'Synthetic second combination ingredient', strengthMg: '5.200000001', amountMg: '5.200000001', unit: 'mg' },
+    ] : [{ name: 'methylphenidate hydrochloride', strengthMg: favorite.strength, amountMg: ['11.25', '3.75'][index], unit: 'mg' }],
+  }));
+  for (const dose of doses) assert.equal((await a.request(`/api/doses/${dose.id}`, 'PUT', dose)).status, 200);
+  for (const packageStrength of [
+    '', '0', '7.5/0', '8', '7.5000000001', '7.5/2.0000000001', '7.5/1000000000000',
+    `7.5/${Array(10).fill('1').join('/')}`, `7.5/${Array(9).fill('1.000000001').join('/')}`,
+  ]) {
+    const rejected = await a.request('/api/doses/invalid-custom-dose', 'PUT', { ...doses[0], id: 'invalid-custom-dose', packageStrength });
+    assert.equal(rejected.status, 400, `Dose package ${packageStrength} must fail consistently with backup validation.`);
+  }
+  const original = (await a.request('/api/export')).data;
+  assert.equal(original.data.favorites.length, 3);
+  assert.equal(original.data.doses.length, 3);
+  assert.deepEqual(original.data.favorites.map(row => row.productId).sort(), ['azstarys', 'methylphenidate-ir', 'ritalin']);
+  const malformedBackup = structuredClone(original);
+  malformedBackup.data.doses[0].packageStrength = '8/2';
+  assert.equal((await a.request('/api/import', 'POST', { backup: malformedBackup, mode: 'replace' })).status, 400);
+  assert.deepEqual((await a.request('/api/export')).data.data, original.data, 'A malformed package import must not partially replace valid records.');
+  await service.stop();
+  service = await start(join(dir, 'synthetic.sqlite'));
+  assert.deepEqual((await a.request('/api/export')).data.data, original.data);
+  await a.request('/api/account', 'DELETE', { password: PASSWORD });
+  const restored = await b.request('/api/import', 'POST', { backup: original, mode: 'replace' });
+  assert.equal(restored.status, 200, JSON.stringify(restored.data));
+  assert.deepEqual(restored.data.data.favorites, original.data.favorites);
+  assert.deepEqual(restored.data.data.doses, original.data.doses);
+  assert.deepEqual((await b.request('/api/export')).data.revisions, original.revisions);
+});

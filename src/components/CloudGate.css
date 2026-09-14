@@ -10,5 +10,13 @@
 .cloud-gate-note a { color: inherit; }
 .cloud-recovery-key { font-family: 'IBM Plex Mono', monospace; font-size: 14px; overflow-wrap: anywhere; min-height: 94px; resize: vertical; }
 .medication-name { min-width: 0; overflow-wrap: anywhere; }
-.medication-name .medication-brand { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: 4px; background: #eef1f4; color: #596471; font-size: 11px; line-height: 1.5; font-weight: 500; vertical-align: 1px; }
+.medication-name .medication-brand { display: block; margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; font-weight: 400; font-style: italic; }
 @media(max-width: 480px) { .cloud-login { padding: 22px; } .cloud-login input { font-size: 16px; } }
+.cloud-auth-dialog { max-width: 420px; margin: 0 auto; }
+.cloud-auth-dialog .auth-form { margin-top: 0; }
+.cloud-auth-dialog p { line-height: 1.55; }
+.cloud-auth-dialog .field-hint { margin: -7px 0 2px; color: var(--muted); font-size: 12px; }
+.cloud-auth-dialog .text-button { min-height: 44px; }
+.cloud-auth-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; }
+.cloud-auth-dialog .cloud-gate-note { margin: 16px 0 0; }
+@media(max-width: 700px) { .cloud-auth-dialog input, .cloud-auth-dialog textarea { font-size: 16px; } }

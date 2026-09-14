@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { products } from '../lib/catalog';
-import { commitFavoriteChanges, favoriteChanges, favoriteSelection, favoriteStrengths, selectFavoriteStrength, strengthKey } from '../lib/favorite-selection';
-import { groupMedicationProducts, medicationDisplay } from '../lib/medication-display';
+import { commitFavoriteChanges, favoriteChanges, favoriteSelection } from '../lib/favorite-selection';
+import { groupMedicationProducts, matchesMedicationGroup, type MedicationGroup } from '../lib/medication-display';
+import { groupStrengthSelected, groupStrengths, selectGroupStrength, selectedGroupCount } from '../lib/grouped-favorite-selection';
+import { parseCustomStrength } from '../lib/package-strength';
 import type { FavoriteChange } from '../lib/favorite-selection';
 import type { Favorite } from '../lib/types';
 import Modal from './Modal';
@@ -15,14 +17,12 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose }:
 }) {
   const [selection, setSelection] = useState(() => favoriteSelection(favorites));
   const [query, setQuery] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [custom, setCustom] = useState<string | null>(null), [customValue, setCustomValue] = useState(''), [customError, setCustomError] = useState('');
   const container = useRef<HTMLDivElement>(null), inFlight = useRef(false), pending = useRef<FavoriteChange[] | null>(null);
   const hintId = useId();
   const needle = query.trim().toLocaleLowerCase();
-  const filtered = products.filter(product => {
-    const display = medicationDisplay(product);
-    return `${product.name} ${product.generic} ${product.formulation} ${display.title} ${display.variant || ''}`.toLocaleLowerCase().includes(needle);
-  });
-  const grouped = groupMedicationProducts(filtered);
+  const grouped = groupMedicationProducts(products).filter(group => matchesMedicationGroup(group, needle));
+  const selectedCount = selectedGroupCount(selection);
   const families = [...new Set(grouped.map(group => group.family))];
   const unknown = favorites.filter(favorite => !products.some(product => product.id === favorite.productId));
 
@@ -35,18 +35,35 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose }:
   }, []);
 
   function close() { if (!inFlight.current) onClose(); }
-  function toggle(productId: string, strength: string, checked: boolean) {
+  function toggle(group: MedicationGroup, strength: string, checked: boolean) {
     if (inFlight.current) return;
     pending.current = null;
     setError('');
-    setSelection(current => selectFavoriteStrength(current, favorites, productId, strength, checked));
+    setSelection(current => selectGroupStrength(current, favorites, group, strength, checked));
+  }
+  function addCustom(group: MedicationGroup) {
+    if (inFlight.current) return;
+    try {
+      const strength = parseCustomStrength(group.defaultProduct, customValue);
+      toggle(group, strength, true);
+      setCustom(null); setCustomValue(''); setCustomError('');
+    } catch (reason) { setCustomError(reason instanceof Error ? reason.message : 'Enter a valid strength.'); }
   }
   async function save() {
     if (inFlight.current) return;
+    let nextSelection = selection;
+    if (custom && customValue.trim()) {
+      const group = groupMedicationProducts(products).find(group => group.id === custom)!;
+      try {
+        nextSelection = selectGroupStrength(selection, favorites, group, parseCustomStrength(group.defaultProduct, customValue), true);
+        setSelection(nextSelection); pending.current = null;
+        setCustom(null); setCustomValue(''); setCustomError('');
+      } catch (reason) { setCustomError(reason instanceof Error ? reason.message : 'Enter a valid strength.'); return; }
+    }
     inFlight.current = true;
     setBusy(true); setError('');
     try {
-      pending.current ??= favoriteChanges(favorites, selection);
+      pending.current ??= favoriteChanges(favorites, nextSelection);
       await commitFavoriteChanges(pending.current, onSave, onRemove);
       onClose();
     } catch (reason) {
@@ -63,24 +80,28 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose }:
         {families.map(family => <section className="fp-family" key={family}>
           <h3>{family}</h3>
           {grouped.filter(group => group.family === family).map(group => <section className="fp-product-group" key={group.id}>
-            <h4>{group.title}</h4>
-            {group.products.map(product => {
-              const display = medicationDisplay(product);
-              return <fieldset className="fp-product" key={product.id}>
-                <legend className={display.variant ? 'fp-variant' : 'sr-only'}>{display.variant || display.label}</legend>
-                {!display.variant && <p className="fp-formulation">{product.formulation}</p>}
-                <div className="fp-strengths">{favoriteStrengths(product, favorites).map(strength => {
-                  const checked = selection.has(strengthKey(product.id, strength));
-                  return <label className={`fp-strength${checked ? ' is-selected' : ''}`} key={strength}>
-                    <input type="checkbox" aria-label={`${display.label} ${strength} ${product.strengthUnit}`} checked={checked} onChange={event => toggle(product.id, strength, event.currentTarget.checked)}/>
-                    <span>{strength} <span className="fp-unit">{product.strengthUnit}</span></span>
-                  </label>;
-                })}</div>
-              </fieldset>;
-            })}
+            <div className="fp-name"><h4>{group.title}</h4>{group.brand && <small className="fp-brand">{group.brand}</small>}</div>
+            <fieldset className="fp-product">
+              <legend className="sr-only">{group.title} strengths</legend>
+              {!group.brand && <p className="fp-formulation">{group.defaultProduct.formulation}</p>}
+              <div className="fp-strengths">{groupStrengths(group, favorites, selection).map(strength => {
+                const checked = groupStrengthSelected(selection, group, strength);
+                return <label className={`fp-strength${checked ? ' is-selected' : ''}`} key={strength}>
+                  <input type="checkbox" aria-label={`${group.title} ${strength} ${group.defaultProduct.strengthUnit}`} checked={checked} onChange={event => toggle(group, strength, event.currentTarget.checked)}/>
+                  <span>{strength} <span className="fp-unit">{group.defaultProduct.strengthUnit}</span></span>
+                </label>;
+              })}<button className="fp-strength fp-custom-toggle" type="button" aria-label={`Custom strength for ${group.title}`} aria-expanded={custom === group.id} onClick={() => {
+                setCustom(current => current === group.id ? null : group.id); setCustomValue(''); setCustomError('');
+              }}>Custom</button></div>
+              {custom === group.id && <div className="fp-custom">
+                <label>Strength · {group.defaultProduct.strengthUnit}<input autoFocus aria-label={`${group.title} custom strength`} aria-invalid={Boolean(customError)} aria-describedby={customError ? `${hintId}-custom-error` : undefined} inputMode={group.defaultProduct.strengths[0].includes('/') ? 'text' : 'decimal'} placeholder={group.defaultProduct.strengths[0].includes('/') ? group.defaultProduct.strengths[0] : 'e.g. 7.5'} value={customValue} onChange={event => { setCustomValue(event.target.value); setCustomError(''); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addCustom(group); } }}/></label>
+                <button className="button secondary" type="button" onClick={() => addCustom(group)}>Add</button>
+                {customError && <p className="inline-error" id={`${hintId}-custom-error`} role="alert">{customError}</p>}
+              </div>}
+            </fieldset>
           </section>)}
         </section>)}
-        {!filtered.length && <p className="fp-empty" role="status">No matching medications.</p>}
+        {!grouped.length && <p className="fp-empty" role="status">No matching medications.</p>}
         {!needle && unknown.length > 0 && <section className="fp-family"><h3>Other saved medications</h3>{unknown.map(favorite => {
           const [key] = favoriteSelection([favorite]).keys();
           return <label className="fp-saved" key={favorite.id}><input type="checkbox" checked={selection.has(key)} onChange={event => {
@@ -92,7 +113,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose }:
       </fieldset>
       {error && <p className="inline-error" role="alert">{error}</p>}
       <div className="fp-footer modal-footer">
-        <span className="muted" role="status">{selection.size} {selection.size === 1 ? 'strength' : 'strengths'} selected</span>
+        <span className="muted" role="status">{selectedCount} {selectedCount === 1 ? 'strength' : 'strengths'} selected</span>
         <button className="button secondary" disabled={busy} onClick={close}>Cancel</button>
         <button className="button primary" disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save selection'}</button>
       </div>

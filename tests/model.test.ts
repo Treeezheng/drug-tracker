@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { concentration, contributions, groupedTotals, modelGroup, effectWindow, blankAssumptions, MODEL_VERSION } from '../src/lib/model.ts';
 import type { Dose } from '../src/lib/types.ts';
+import { getProduct, sources } from '../src/lib/catalog.ts';
 
 const HOUR = 3_600_000;
 const START = Date.parse('2026-09-12T08:00:00Z');
@@ -193,4 +194,57 @@ test('effect duration origin produces the explicit 08:30 to 11:30–13:30 interv
   assert.ok(concentration(dose, fourHours.maxEnd + HOUR).value! > 0);
   assert.equal(effectWindow({ ...dose, assumptions: { ...dose.assumptions!, accepted: false } }), null);
   assert.equal(effectWindow({ ...dose, administeredAt: '' }), null);
+});
+
+test('custom package strengths cannot gain a reference curve by matching its total dose', () => {
+  const cases = [
+    fixture('ritalin', { strength: '2.5', packageStrength: '2.5', quantity: '4', amountMg: '10', unusual: false }),
+    fixture('ritalin', { strength: '2', packageStrength: '2', quantity: '5', amountMg: '10', unusual: false }),
+    fixture('concerta', { strength: '9', packageStrength: '9', quantity: '2', amountMg: '18', unusual: false }),
+    fixture('concerta', { strength: '36', packageStrength: '36', quantity: '0.5', amountMg: '18', unusual: false }),
+    fixture('ritalin', { strength: '20', packageStrength: '20', quantity: '0.5', amountMg: '10', unusual: false }),
+  ];
+  for (const dose of cases) {
+    const before = structuredClone(dose);
+    assert.equal(modelGroup(dose).reference, false);
+    const result = concentration(dose, START + 2 * HOUR);
+    assert.equal(result.value, null); assert.equal(result.unit, 'relative units'); assert.equal(result.evidence, 'D');
+    assert.deepEqual(dose, before);
+  }
+});
+
+test('reference eligibility rejects inconsistent package, unit, quantity and mass snapshots', () => {
+  for (const patch of [
+    { packageStrength: '20' }, { packageStrength: '10/5' }, { packageStrength: '' },
+    { strength: '5', packageStrength: '10', quantity: '2' }, { quantity: '2' },
+    { strengthUnit: 'mg/mL' }, { unit: 'mL' }, { amountBasis: 'first listed ingredient' },
+    { strength: '1e1' }, { amountMg: '0xA' }, { quantity: '-1' }, { quantity: '1.0000000001' },
+  ] as Partial<Dose>[]) {
+    assert.equal(modelGroup(fixture('ritalin', patch)).reference, false, JSON.stringify(patch));
+  }
+});
+
+test('valid legacy snapshots and equivalent decimal spellings keep existing reference anchors', () => {
+  const legacy = fixture('ritalin');
+  assert.equal(legacy.packageStrength, undefined); assert.equal(legacy.strengthUnit, undefined);
+  close(concentration(legacy, START + 2 * HOUR).value, 4.3);
+  const spelled = fixture('ritalin', { strength: '10.000', packageStrength: '10.0', quantity: '1.000000000', amountMg: '10.00', strengthUnit: 'mg' });
+  close(concentration(spelled, START + 2 * HOUR).value, 4.3);
+  const twoWhole = fixture('ritalin', { strength: '5', packageStrength: '5', quantity: '2' });
+  close(concentration(twoWhole, START + 2 * HOUR).value, 4.3);
+  assert.equal(modelGroup(fixture('methylphenidate-ir', { strength: '10', packageStrength: '10' })).reference, false);
+});
+
+test('custom amounts remain loggable as explicit dimensionless illustrations without reference inheritance', () => {
+  const dose = fixture('ritalin', { strength: '2.5', packageStrength: '2.5', quantity: '4', amountMg: '10', assumptions: { ...blankAssumptions(), accepted: true } });
+  const result = concentration(dose, START + 2 * HOUR);
+  close(result.value, 1); assert.equal(result.unit, 'relative units'); assert.equal(result.evidence, 'D');
+});
+
+test('generic dextroamphetamine includes seven primary-label strengths without gaining brand identity or a PK model', () => {
+  const generic = getProduct('dextroamphetamine-ir');
+  assert.deepEqual(generic.strengths, ['2.5', '5', '7.5', '10', '15', '20', '30']);
+  assert.equal(generic.manufacturer, 'Confirm labeler on package'); assert.equal(generic.evidence, 'D'); assert.equal(generic.model, 'assumption');
+  assert.ok(generic.sourceIds.some(id => sources.find(source => source.id === id)?.url.endsWith('ca1a8890-0675-4c9c-9716-6c28f975d827')));
+  for (const strength of generic.strengths) assert.equal(modelGroup(fixture(generic.id, { strength, amountMg: strength })).reference, false);
 });

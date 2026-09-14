@@ -65,18 +65,40 @@ function openCloudDatabase(dbPath) {
     chmodSync(dbPath, 0o600);
     db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;');
     try {
-      db.exec(`CREATE TABLE IF NOT EXISTS cloud_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), edition TEXT NOT NULL, version INTEGER NOT NULL) STRICT;
-        CREATE TABLE IF NOT EXISTS cloud_accounts (
-          singleton INTEGER PRIMARY KEY CHECK(singleton=1), id TEXT NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE,
+      db.exec('CREATE TABLE IF NOT EXISTS cloud_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), edition TEXT NOT NULL, version INTEGER NOT NULL) STRICT');
+      const version = db.prepare('SELECT edition, version FROM cloud_meta WHERE singleton=1').get();
+      if (version && (version.edition !== 'drug-cloud-encrypted' || ![1, 2].includes(version.version))) throw new CloudError(400, 'Unsupported cloud database version.');
+      if (!version) {
+        if (tables.includes('cloud_accounts') || tables.includes('cloud_sessions')) throw new CloudError(400, 'The existing cloud account database has no supported version.');
+        db.exec(`CREATE TABLE cloud_accounts (
+          id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE,
           password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL
         ) STRICT;
-        CREATE TABLE IF NOT EXISTS cloud_sessions (
+        CREATE TABLE cloud_sessions (
           token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
           expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
         ) STRICT;`);
-      const version = db.prepare('SELECT edition, version FROM cloud_meta WHERE singleton=1').get();
-      if (version && (version.edition !== 'drug-cloud-encrypted' || version.version !== 1)) throw new CloudError(400, 'Unsupported cloud database version.');
-      if (!version) db.prepare('INSERT INTO cloud_meta VALUES (1,?,1)').run('drug-cloud-encrypted');
+        db.prepare('INSERT INTO cloud_meta VALUES (1,?,2)').run('drug-cloud-encrypted');
+      } else if (version.version === 1) {
+        // Copy accounts and sessions together before dropping the singleton tables.
+        // Keeping their IDs preserves every existing vault and authenticated session.
+        db.exec(`CREATE TABLE cloud_accounts_v2 (
+          id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO cloud_accounts_v2 SELECT id, username, password_hash, name, created_at FROM cloud_accounts;
+        CREATE TABLE cloud_sessions_v2 (
+          token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES cloud_accounts_v2(id) ON DELETE CASCADE,
+          expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO cloud_sessions_v2 SELECT token_hash, owner_id, expires_at, created_at FROM cloud_sessions;
+        DROP TABLE cloud_sessions;
+        DROP TABLE cloud_accounts;
+        ALTER TABLE cloud_accounts_v2 RENAME TO cloud_accounts;
+        ALTER TABLE cloud_sessions_v2 RENAME TO cloud_sessions;
+        UPDATE cloud_meta SET version=2 WHERE singleton=1;`);
+      }
+      if (db.prepare('PRAGMA foreign_key_check').all().length) throw new CloudError(400, 'Cloud account relationships could not be preserved.');
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     return db;
@@ -97,7 +119,7 @@ export async function bootstrapCloudAccount({ dbPath, username: suppliedName, pa
     try {
       if (db.prepare('SELECT id FROM cloud_accounts').get()) throw new CloudError(409, 'This cloud account is already configured.');
       const user = { id: randomUUID(), name: name.trim() };
-      db.prepare('INSERT INTO cloud_accounts VALUES (1,?,?,?,?,?)').run(user.id, loginName, encoded, user.name, new Date().toISOString());
+      db.prepare('INSERT INTO cloud_accounts (id,username,password_hash,name,created_at) VALUES (?,?,?,?,?)').run(user.id, loginName, encoded, user.name, new Date().toISOString());
       db.exec('COMMIT');
       return { user };
     } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -125,18 +147,28 @@ export async function createCloudServer(options = {}) {
   const config = configuration(options), build = staticBuild(options.distDir);
   const db = openCloudDatabase(config.dbPath);
   let vaultStore;
+  let dummyHash;
   try {
-    if (!db.prepare('SELECT id FROM cloud_accounts').get()) throw new CloudError(503, 'Run the one-time cloud account bootstrap before starting the server.');
     vaultStore = openVaultStore({ dbPath: config.dbPath });
-  } catch (error) { db.close(); throw error; }
+    dummyHash = await passwordHash(randomBytes(32).toString('base64url'));
+  } catch (error) { vaultStore?.close(); db.close(); throw error; }
   const cookieName = config.secure ? '__Secure-drug_cloud_session' : 'drug_cloud_dev_session';
   const attemptLimit = options.loginAttemptLimit ?? 30;
   const windowMs = options.loginWindowMs ?? 15 * 60 * 1000;
-  if (!Number.isSafeInteger(attemptLimit) || attemptLimit < 1 || !Number.isSafeInteger(windowMs) || windowMs < 1) { vaultStore.close(); db.close(); invalid('Invalid login rate limit.'); }
-  let attemptCount = 0, attemptUntil = 0, verifying = 0, closed = false;
-  function rateLimit() {
-    if (Date.now() >= attemptUntil) { attemptCount = 0; attemptUntil = Date.now() + windowMs; }
-    if (++attemptCount > attemptLimit || verifying >= 2) throw new CloudError(429, 'Too many sign-in attempts. Please wait before trying again.', { retryAfter: Math.max(1, Math.ceil((attemptUntil - Date.now()) / 1000)) });
+  const registrationLimit = options.registrationAttemptLimit ?? 10;
+  const registrationWindowMs = options.registrationWindowMs ?? 60 * 60 * 1000;
+  if ([attemptLimit, windowMs, registrationLimit, registrationWindowMs].some(value => !Number.isSafeInteger(value) || value < 1)) { vaultStore.close(); db.close(); invalid('Invalid account rate limit.'); }
+  const attempts = { login: { count: 0, until: 0 }, register: { count: 0, until: 0 } };
+  let verifying = 0, closed = false;
+  function rateLimit(kind = 'login') {
+    const entry = attempts[kind], duration = kind === 'register' ? registrationWindowMs : windowMs;
+    if (Date.now() >= entry.until) { entry.count = 0; entry.until = Date.now() + duration; }
+    if (++entry.count > (kind === 'register' ? registrationLimit : attemptLimit) || verifying >= 2) throw new CloudError(429, 'Too many account attempts. Please wait before trying again.', { retryAfter: Math.max(1, Math.ceil((entry.until - Date.now()) / 1000)) });
+  }
+  async function hashWork(operation) {
+    if (verifying >= 2) throw new CloudError(429, 'Too many account attempts. Please wait before trying again.', { retryAfter: 1 });
+    verifying++;
+    try { return await operation(); } finally { verifying--; }
   }
   function token(req) {
     const matches = (req.headers.cookie ?? '').split(';').map(part => part.trim()).filter(part => part.startsWith(`${cookieName}=`));
@@ -152,11 +184,17 @@ export async function createCloudServer(options = {}) {
   function owner(req) {
     const user = currentUser(req);
     if (!user) throw new CloudError(401, 'Sign in to access your encrypted vault.');
-    if (req.headers['x-dose-owner'] !== user.id) throw new CloudError(409, 'The selected account changed. Sign in again before continuing.');
+    if (req.headers['x-dose-owner'] !== user.id) throw new CloudError(401, 'The selected account changed. Sign in again before continuing.');
     return user;
   }
   function cookie(res, value = '') {
     res.setHeader('Set-Cookie', `${cookieName}=${value}; Path=/drug/; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}${config.secure ? '; Secure' : ''}`);
+  }
+  function issueSession(user) {
+    const value = randomBytes(32).toString('base64url');
+    db.prepare('DELETE FROM cloud_sessions WHERE expires_at<=?').run(Date.now());
+    db.prepare('INSERT INTO cloud_sessions VALUES (?,?,?,?)').run(hash(value), user.id, Date.now() + SESSION_SECONDS * 1000, new Date().toISOString());
+    return value;
   }
   function guards(req) {
     if (req.headers.host !== config.host) throw new CloudError(403, 'Untrusted request host.');
@@ -207,24 +245,39 @@ export async function createCloudServer(options = {}) {
       const path = new URL(req.url, config.origin).pathname;
       if (path === `${PREFIX}/edition` && req.method === 'GET') return send(res, 200, { edition: 'cloud' });
       if (path === `${PREFIX}/session` && req.method === 'GET') { const user = currentUser(req); return send(res, 200, { user: user ? publicUser(user) : null }); }
+      if (path === `${PREFIX}/auth/register` && req.method === 'POST') {
+        rateLimit('register');
+        const input = await body(req);
+        exactObject(input, ['username', 'password', ...(input && Object.hasOwn(input, 'name') ? ['name'] : [])]);
+        const loginName = username(input.username); password(input.password, true);
+        const name = input.name === undefined ? loginName : input.name;
+        if (typeof name !== 'string' || !name.trim() || name.length > 100) invalid('Use a display name of 1–100 characters.');
+        if (db.prepare('SELECT id FROM cloud_accounts WHERE username=?').get(loginName)) throw new CloudError(409, 'Username is unavailable.');
+        const encoded = await hashWork(() => passwordHash(input.password));
+        const user = { id: randomUUID(), name: name.trim() };
+        let value;
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (db.prepare('SELECT id FROM cloud_accounts WHERE username=?').get(loginName)) throw new CloudError(409, 'Username is unavailable.');
+          db.prepare('INSERT INTO cloud_accounts (id,username,password_hash,name,created_at) VALUES (?,?,?,?,?)').run(user.id, loginName, encoded, user.name, new Date().toISOString());
+          value = issueSession(user);
+          db.exec('COMMIT');
+        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        cookie(res, value);
+        return send(res, 201, { user });
+      }
       if (path === `${PREFIX}/auth/login` && req.method === 'POST') {
         rateLimit();
         const input = exactObject(await body(req), ['username', 'password']);
         const loginName = username(input.username); password(input.password);
-        const account = db.prepare('SELECT * FROM cloud_accounts WHERE singleton=1').get();
-        if (verifying >= 2) throw new CloudError(429, 'Too many sign-in attempts. Please wait before trying again.', { retryAfter: 1 });
-        verifying++;
-        let matches;
-        try { matches = await passwordMatches(input.password, account.password_hash); }
-        finally { verifying--; }
-        if (!matches || account.username !== loginName) throw new CloudError(401, 'Username or account password is incorrect.');
+        const account = db.prepare('SELECT * FROM cloud_accounts WHERE username=?').get(loginName);
+        const matches = await hashWork(() => passwordMatches(input.password, account?.password_hash ?? dummyHash));
+        if (!matches || !account) throw new CloudError(401, 'Username or account password is incorrect.');
         db.exec('BEGIN IMMEDIATE');
         try {
           const fresh = db.prepare('SELECT * FROM cloud_accounts WHERE id=? AND password_hash=?').get(account.id, account.password_hash);
           if (!fresh) throw new CloudError(401, 'The account changed. Sign in again.');
-          const value = randomBytes(32).toString('base64url');
-          db.prepare('DELETE FROM cloud_sessions WHERE expires_at<=?').run(Date.now());
-          db.prepare('INSERT INTO cloud_sessions VALUES (?,?,?,?)').run(hash(value), fresh.id, Date.now() + SESSION_SECONDS * 1000, new Date().toISOString());
+          const value = issueSession(fresh);
           db.exec('COMMIT');
           cookie(res, value);
           return send(res, 200, { user: publicUser(fresh) });
@@ -233,7 +286,7 @@ export async function createCloudServer(options = {}) {
       if (path === `${PREFIX}/auth/logout` && req.method === 'POST') {
         const input = await body(req); exactObject(input, []);
         const user = currentUser(req);
-        if (user && req.headers['x-dose-owner'] && req.headers['x-dose-owner'] !== user.id) throw new CloudError(409, 'The selected account changed. Sign in again.');
+        if (user && req.headers['x-dose-owner'] && req.headers['x-dose-owner'] !== user.id) throw new CloudError(401, 'The selected account changed. Sign in again.');
         const value = token(req);
         if (value) db.prepare('DELETE FROM cloud_sessions WHERE token_hash=?').run(hash(value));
         cookie(res);

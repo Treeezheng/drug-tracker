@@ -753,3 +753,15 @@ tr:last-child td { border-bottom: 0; }
   .simulation-toolbar .mobile-add-dose { display: inline-flex; min-height: 44px; padding-inline: 11px; font-size: 14px; }
   .simulation-toolbar > .segmented { grid-column: 1/-1; justify-self: start; }
 }
+
+/* One medicine label, with the individual dose colors stacked beside it. */
+.chart-legend .legend-medication { align-items: center; min-width: 0; max-width: 100%; }
+.chart-legend .legend-swatches { display: flex; flex-direction: column; gap: 5px; flex: 0 0 17px; }
+.chart-legend .legend-swatches i { width: 17px; min-height: 2px; }
+.chart-legend .legend-label { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.chart-legend .legend-strength { white-space: nowrap; }
+.reading-values { display: flex; flex: 1; justify-content: flex-end; align-items: flex-start; gap: 12px 22px; flex-wrap: wrap; min-width: 0; }
+.reading-values .reading-value { display: flex; flex-direction: column; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
+.reading-values .reading-value strong { font-size: 24px; font-weight: 600; letter-spacing: -.5px; }
+.reading-values .reading-value small { font-size: 12px; color: var(--muted); }
+.chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }

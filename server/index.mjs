@@ -39,6 +39,14 @@ function decimal(value, field) {
   return value;
 }
 
+function validatePackageStrength(value, first) {
+  textField(value, 'package strength', 100);
+  const components = value.split('/');
+  if (components.length > 10) bad('Too many package strength components.');
+  for (const component of components) decimal(component, 'Package strength component');
+  if (favoriteKey({ productId: 'package', strength: components[0] }) !== favoriteKey({ productId: 'package', strength: first })) bad('Package strength must match its first strength component.');
+}
+
 function zone(value) {
   textField(value, 'time zone', 80);
   if (/^[+-]/.test(value)) bad('Use an IANA time zone.');
@@ -118,6 +126,7 @@ function validate(kind, id, data) {
     decimal(payload.strength, 'Strength');
     decimal(payload.quantity, 'Quantity');
     decimal(payload.amountMg, 'Amount');
+    if (payload.packageStrength !== undefined) validatePackageStrength(payload.packageStrength, payload.strength);
     instant(payload.administeredAt, 'Administration time');
     zone(payload.timeZone);
     if (!['actual', 'planned', 'skipped'].includes(payload.status)) bad('Choose actual, planned, or skipped status.');
@@ -163,11 +172,7 @@ function validate(kind, id, data) {
     decimal(payload.strength, 'Strength');
     decimal(payload.quantity, 'Quantity');
     if (payload.packageStrength !== undefined) {
-      textField(payload.packageStrength, 'package strength', 100);
-      const components = payload.packageStrength.split('/');
-      if (components.length > 10) bad('Too many package strength components.');
-      for (const component of components) decimal(component, 'Package strength component');
-      if (favoriteKey({ productId: payload.productId, strength: components[0] }) !== favoriteKey({ productId: payload.productId, strength: payload.strength })) bad('Package strength must match its first strength component.');
+      validatePackageStrength(payload.packageStrength, payload.strength);
     }
   }
   if (kind === 'checkins') {

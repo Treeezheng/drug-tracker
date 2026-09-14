@@ -51,6 +51,7 @@ export const sources:Source[] = [
   label('C23','Metformin hydrochloride ER tablets, 500 / 750 mg — DailyMed',dm('6d6ee6f8-9650-ff4f-e053-2991aa0acf19'),'This conventional ER label lists 500 and 750 mg metformin hydrochloride. Keep separate from the osmotic ER family.','§§1, 3, 11, 16; RxNorm'),
   label('C24','Metformin hydrochloride osmotic ER tablets, 500 / 1000 mg — DailyMed',dm('ef77c7dd-a65f-4adc-a0d9-a93779b459a0'),'500 and 1000 mg metformin hydrochloride; DailyMed RxNorm mapping identifies osmotic 24-hour ER tablets. No mg-for-mg curve transfer from another formulation.','§§1, 3, 16; RxNorm'),
   label('C25','Riomet metformin hydrochloride oral solution — DailyMed historical label',dm('05d4df4b-dfe8-4828-b423-a3d4f2c4114a'),'Historical December 2018 label: 500 mg per 5 mL (100 mg/mL) metformin hydrochloride solution. Current package labeler and marketing are unverified; this is not an ER suspension.','§§1, 3, 11, 16'),
+  label('C26','Dextroamphetamine sulfate IR tablets — DailyMed, Winder reference',dm('ca1a8890-0675-4c9c-9716-6c28f975d827'),'Winder label updated June 18, 2025 lists 2.5, 5, 7.5, 10, 15, 20 and 30 mg tablets and individual package NDCs. This supports the generic formulation catalog, not the user’s manufacturer, current availability or a concentration model. Scoring differs by strength.','Description; How Supplied; Product information'),
 ];
 
 const unverified = 'Label referenced; current marketing and stock unverified';
@@ -92,7 +93,7 @@ export const products:Product[] = [
   product('zenzedi','Zenzedi','dextroamphetamine sulfate','Immediate-release tablet','Dextroamphetamine',['2.5','5','7.5','10','15','20','30'],['C16']),
   product('procentra','ProCentra','dextroamphetamine sulfate','Immediate-release oral solution','Dextroamphetamine',['1'],['C17'],{unit:'mL',strengthUnit:'mg/mL',note:'5 mg/5 mL (1 mg/mL). '+assumedNote}),
   product('dexedrine-spansule','Dexedrine Spansule','dextroamphetamine sulfate','Sustained-release capsule','Dextroamphetamine',['5','10','15'],['C18'],{unit:'capsule'}),
-  product('dextroamphetamine-ir','Dextroamphetamine IR (generic)','dextroamphetamine sulfate','Immediate-release tablet','Dextroamphetamine',['5','10'],['C16'],{note:'Generic family shortcut; confirm manufacturer, exact labeled strength and formulation. '+assumedNote}),
+  product('dextroamphetamine-ir','Dextroamphetamine IR (generic)','dextroamphetamine sulfate','Immediate-release tablet','Dextroamphetamine',['2.5','5','7.5','10','15','20','30'],['C26'],{note:'Generic family shortcut; strengths verified against a Winder label. Confirm the actual manufacturer, package strength and formulation; scoring is package-specific. '+assumedNote}),
   product('xelstrym','Xelstrym','dextroamphetamine','Transdermal system','Dextroamphetamine',['4.5','9','13.5','18'],['S9'],{unit:'patch',strengthUnit:'mg/9 h',route:'transdermal',note:'Labeled delivery over 9 hours; patch content is larger. Record application and removal. '+assumedNote}),
   product('vyvanse-capsule','Vyvanse capsule','lisdexamfetamine dimesylate','Prodrug capsule','Lisdexamfetamine',['10','20','30','40','50','60','70'],['S5'],{unit:'capsule'}),
   product('vyvanse-chewable','Vyvanse chewable','lisdexamfetamine dimesylate','Prodrug chewable tablet','Lisdexamfetamine',['10','20','30','40','50','60'],['S5']),

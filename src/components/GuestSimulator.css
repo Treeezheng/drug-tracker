@@ -1,0 +1,5 @@
+.guest-storage-note{color:var(--muted);font-size:13px;line-height:1.5;margin:-9px 0 22px}
+.guest-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:18px 0;color:var(--muted);font-size:13px}
+.guest-bottom .text-button{min-height:44px}.guest-bottom>span{line-height:1.5}
+.guest-preferences>.settings-grid{margin:18px 0}.guest-preferences>.check-line{margin:18px 0}
+@media(max-width:700px){.guest-shell .account-control{gap:8px;flex-wrap:wrap}.guest-shell .account-control>.text-button{min-height:44px}.guest-storage-note{font-size:13px}.guest-bottom{align-items:flex-start;flex-direction:column}.guest-preferences input,.guest-preferences select{font-size:16px}}

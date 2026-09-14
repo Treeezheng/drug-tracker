@@ -1,13 +1,13 @@
 # 客户端保险箱加密模块：协议、接口与边界
 
-核对日期：2026-09-13。本次交付是 `src/lib/vault-crypto.ts` 和专项测试，**没有接入 App、API、现有数据库或浏览器持久化**。不能据此声称整个应用已启用端到端加密、通过安全审计或符合某项医疗合规标准。
+核对日期：2026-09-13。`src/lib/vault-crypto.ts` 最初作为独立原语模块交付，随后由独立云版的 cloud-client / CloudGate 接入加密账户流程；本机版未改成加密数据库，访客 localStorage 草稿也未加密。本文件只描述原语协议与专项测试，不能据此声称整个网站的所有数据均已端到端加密、通过安全审计或符合某项医疗合规标准。当前集成状态见 [版本与加密边界](./editions-and-encryption.md)。
 
 ## 密码学选择与依据
 
 - 数据密钥（DEK / vault key）通过 Web Crypto `generateKey` 生成随机 AES-256-GCM 密钥。采用平台实现，没有自行实现 AES 或随机算法。[MDN AES 密钥参数](https://developer.mozilla.org/en-US/docs/Web/API/AesKeyGenParams)、[OWASP Cryptographic Storage](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html)
 - 每次加密数据、每次包裹密钥都重新生成 12 字节（96 位）随机 IV / nonce，使用 128 位 GCM tag。IV 可公开，但同一密钥下不能复用来加密新明文。[MDN AesGcmParams](https://developer.mozilla.org/en-US/docs/Web/API/AesGcmParams)
 - 独立的客户端 vault passphrase 经 PBKDF2-HMAC-SHA-256、随机 16 字节 salt、默认 600,000 次迭代，派生不可导出的 AES-256-GCM KEK，用平台 `wrapKey` / `unwrapKey` 包裹随机 DEK。这里采用 OWASP 列出的 PBKDF2 工作量基线；这不是把 PBKDF2 描述为其所有场景的首选算法，也不是 FIPS 认证声明。[OWASP Password Storage：PBKDF2](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#pbkdf2)、[MDN deriveKey](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/deriveKey)、[MDN wrapKey](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/wrapKey)
-- 口令必须由未来的客户端独立收集。**登录密码不能作为 vault passphrase，也不能调用服务器来派生或恢复 DEK。** 本模块既不读取登录信息，也不包含任何网络、存储、剪贴板或 URL 操作；调用方必须维持这种分离。无法仅凭两个字符串自动判断用户有没有重复使用密码。
+- 口令必须由客户端独立收集。**登录密码不能作为 vault passphrase，也不能调用服务器来派生或恢复 DEK。** 本模块既不读取登录信息，也不包含任何网络、存储、剪贴板或 URL 操作；调用方必须维持这种分离。客户端没有此前登录密码时，不能声称总能检测密码是否重复。
 
 新口令的实现限制为至少 12 个 Unicode 字符、最多 1,024 个 UTF-16 code units，不要求特定字符组合，也不执行 trim、Unicode normalization 或截断。长度下限不等于足够的抗猜测强度；未来 UI 应引导使用较长、独立的随机口令。PBKDF2 只能提高每次猜测的成本，不能消除服务器密文泄露后的离线猜测。解锁时只接受 600,000–2,000,000 的整数迭代次数；上限用于拒绝不受控的高成本信封，并不防止恶意脚本连续发起大量操作。
 

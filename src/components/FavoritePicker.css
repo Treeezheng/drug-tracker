@@ -7,9 +7,10 @@
 .favorite-picker .fp-family + .fp-family { margin-top: 28px; }
 .favorite-picker .fp-family > h3 { margin: 0 0 4px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; }
 .favorite-picker .fp-product-group { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr); column-gap: 22px; row-gap: 12px; padding: 16px 0; border-bottom: 1px solid #eceff2; }
-.favorite-picker .fp-product-group > h4 { grid-column: 1; margin: 0; padding-top: 11px; font-size: 14px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.favorite-picker .fp-name { grid-column: 1; padding-top: 10px; min-width: 0; }
+.favorite-picker .fp-name h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .favorite-picker .fp-product { grid-column: 2; }
-.favorite-picker .fp-variant { margin: 0 0 8px; padding: 3px 8px; border-radius: 4px; color: #596471; background: #f0f3f6; font-size: 12px; font-weight: 500; }
+.favorite-picker .fp-brand { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-style: italic; line-height: 1.45; }
 .favorite-picker .fp-formulation { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .favorite-picker .fp-strengths { display: flex; flex-wrap: wrap; gap: 8px; }
 .favorite-picker .fp-strength { display: inline-flex; align-items: center; justify-content: flex-start; gap: 7px; min-height: 44px; min-width: 76px; max-width: 100%; padding: 9px 11px; border: 1px solid #cbd2da; border-radius: 7px; background: #fff; color: var(--text); cursor: pointer; font-size: 13px; line-height: 1.3; }
@@ -29,7 +30,8 @@
   .favorite-picker .fp-search input { font-size: 16px; }
   .favorite-picker .fp-hint { margin-bottom: 18px; }
   .favorite-picker .fp-product-group { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; }
-  .favorite-picker .fp-product-group > h4 { padding-top: 0; font-size: 15px; }
+  .favorite-picker .fp-name { padding-top: 0; }
+  .favorite-picker .fp-name h4 { font-size: 15px; }
   .favorite-picker .fp-strength { min-width: 72px; padding: 10px; font-size: 14px; }
   .favorite-picker .fp-footer { bottom: -20px; gap: 8px; }
   .favorite-picker .fp-footer > .muted { flex-basis: 100%; }
@@ -38,3 +40,10 @@
 @media (max-width: 380px) {
   .favorite-picker .fp-footer { bottom: -16px; }
 }
+
+.favorite-picker .fp-custom-toggle { justify-content: center; color: var(--muted); }
+.favorite-picker .fp-custom { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.favorite-picker .fp-custom > label { flex: 1 1 130px; max-width: 280px; min-width: 0; color: var(--muted); font-size: 12px; }
+.favorite-picker .fp-custom input { display: block; width: 100%; min-width: 0; min-height: 44px; margin-top: 5px; font-size: 16px; }
+.favorite-picker .fp-custom > .button { min-height: 44px; }
+.favorite-picker .fp-custom > .inline-error { flex-basis: 100%; margin: 0; }
