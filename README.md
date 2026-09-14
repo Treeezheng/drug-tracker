@@ -12,7 +12,7 @@ A personal medication tracker and reference simulator operated by Treee.
 
 Three pages, with English interface text:
 
-- **Dose Simulation:** a reference chart, independent dose rows, and a collapsed Discomfort check-in. In an account, green **Add** saves future entries as Planned and current or past entries as Taken. A plan stays Planned until explicitly confirmed. Once its time arrives, the optional **Taken** shortcut opens a confirmation of the actual date and time, initially showing the planned time; it never records a dose automatically. Settings can hide that shortcut while keeping Edit. Guest **Add** only validates and collapses a simulated row, with no account save. New entries default to the current local time. Planned and simulated doses do not count toward consumption or taken-dose history.
+- **Dose Simulation:** one medication chart at a time, a selector to switch formulations, independent dose rows, and a collapsed Discomfort check-in. In an account, green **Add** saves future entries as Planned and current or past entries as Taken. A plan stays Planned until explicitly confirmed. Once its time arrives, the optional **Taken** shortcut opens a confirmation of the actual date and time, initially showing the planned time; it never records a dose automatically. Settings can hide that shortcut while keeping Edit. Guest **Add** only validates and collapses a simulated row, with no account save. New entries default to the current local time. Planned and simulated doses do not count toward consumption or taken-dose history.
 - **History:** medication totals and daily bars, selected date ranges, dose corrections, symptom counts and CSV export. Symptom comparisons show same-day records, not causation. Download CSV exports selected dose records and separate symptom rows.
 - **Settings:** categorized favorites with multiple strengths per medication, time zone and clock preferences, supply receipts and estimated stock, account, backup, privacy and project information.
 
@@ -54,9 +54,29 @@ Read the [privacy statement](PRIVACY.md). Local authentication recovery and host
 
 ## Medical scope
 
-Catalog coverage is broader than model coverage. Concerta **18 mg** reconstructs a reference group trace with an estimated terminal continuation; Ritalin IR **10 mg** uses a constructed parameter-based reference estimate. Neither is an individual measurement.
+Catalog coverage is broader than model coverage. Available references now extend beyond Ritalin IR and Concerta:
 
-Eight catalog-defined pairs of corresponding brand and generic formulations share a medication selector and deduplicated strengths. Existing records retain their product and package snapshots; different release systems, liquids and patches remain distinct. Where an existing matching reference is available, the chart can display a **starred reference estimate**: methylphenidate IR catalog 5/10/20 mg intact tablets and Concerta catalog strengths use an explicitly unvalidated proportional scaling of their respective reference. Compatible contributions can be added in the displayed estimate total, while direct-model values and their completeness remain separate in the calculation metadata. Solid curves, medication labels and numeric stars link to one explanation and its sources. No supported model or reference means no invented concentration. See [reference estimate scope](docs/reference-overlay-2026-09-13.md).
+| Medication family | Examples with reference curves |
+| --- | --- |
+| Methylphenidate | IR tablets, Methylin oral solution, IR chewable tablets, Concerta, Ritalin LA, Aptensio XR, Metadate CD, Quillivant XR, QuilliChew ER, Cotempla XR-ODT, Jornay PM, and the ER reference included in the Relexxii label |
+| Dexmethylphenidate | Focalin IR and Focalin XR references, including their corresponding generic formulation entries |
+| Serdexmethylphenidate / dexmethylphenidate combination | Azstarys, using its complete two-ingredient package and one active d-methylphenidate reference curve |
+| Amphetamines | Mixed amphetamine salts IR/XR (Adderall references), Mydayis, Evekeo IR/ODT, Dyanavel XR tablets/suspension, dextroamphetamine IR and Dexedrine Spansule, lisdexamfetamine capsules/chewable tablets (Vyvanse references), and Arynta oral solution |
+| Nonstimulants | Atomoxetine (Strattera reference), guanfacine ER (Intuniv), clonidine ADHD ER tablets (Kapvay reference), and viloxazine ER (Qelbree) |
+
+These entries use specific study doses and formulations, with estimated scaling where supported by the implementation. They do not cover every medicine, package or way of taking a dose. Atomoxetine uses a studied CYP2D6 extensive-metabolizer population; it does not infer the user's metabolism. A concentration peak is not an immediate therapeutic effect window.
+
+Eight catalog-defined brand/generic formulation pairs share a selector and deduplicated strengths, with the recognizable brand shown below the ingredient/formulation. Saved product and package identities remain intact.
+
+The chart displays **one medication formulation at a time**. The medication selector switches the curve, reading, sources and prior-dose carryover together. Repeated doses of that formulation contribute to its estimated total; different medications are not presented as a combined effect. Separate analytes, including d- and l-amphetamine, have a second selector and are never added into one concentration.
+
+**A star marks a reference estimate, estimated continuation or incomplete total.** Click the chart's star or **Sources & methods / No drug data** disclosure to inspect the evidence. A dash means a supported value is unavailable; it does not mean zero. Dose times remain visible when no concentration curve is supported.
+
+References in [the registry](src/lib/pk-references.ts) use FDA/DailyMed single-dose parameters, rounded published figures or explicitly constructed landmarks. Immediate-, extended- and delayed-release formulations remain distinct. Interpolation, dose scaling, fitted absorption, generic reference transfer and terminal tails are estimates. The original record's evidence is not upgraded just because a reference can be drawn. Concerta 18 mg's reconstructed group trace and Ritalin IR 10 mg's parameter-based curve are also references, not individual measurements. Formula and Sources & methods identify the selected formulation's population, dose basis and numerical limitations.
+
+Read the [chart guide](https://treeezh.com/drug/chart-guide.html), [amphetamine research](docs/amphetamine-pk-reference-research-2026-09-14.md), [MPH research](docs/mph-pk-reference-research-2026-09-14.md), [additional MPH figure review](docs/common-mph-reference-review-2026-09-14.md), [additional stimulant research](docs/common-stimulant-pk-research-2026-09-14.md), [Azstarys combination reference](docs/azstarys-pk-research-2026-09-14.md), and [nonstimulant research](docs/nonstimulant-pk-research-2026-09-14.md). These notes distinguish source facts from constructed curves and document available exposure checks and remaining gaps.
+
+Half-tablet references are enabled only for the appropriate reviewed IR products or explicitly listed scored package strengths. In particular, QuilliChew ER permits halves of 20 and 30 mg tablets, not 40 mg; intact ER capsules, ODTs and other tablets do not inherit this rule.
 
 Each dose has a read-only **Formula** disclosure. Unsupported or custom packages do not gain a reference curve merely by adding up to a reference dose. Previously saved illustrative assumptions remain readable, clearly labeled unvalidated; the interface no longer offers controls to create or accept them. The dose editor omits optional notes, manufacturer and administration-detail controls. Existing metadata remains in saved records and backups; patches retain their removal-time control.
 
@@ -74,6 +94,8 @@ pnpm test
 The [Verify workflow](.github/workflows/ci.yml) runs on pull requests and main: TypeScript, unit/API tests, a disposable PostgreSQL integration database, both editions, and repeat-build hash comparison. Main requires a pull request and a passing Verify check. CodeQL, Dependabot, secret scanning and push protection are configured; [configuration and verification](docs/github-verification.md) records their scope.
 
 API tests create isolated temporary databases and local test ports. They do not use the personal database. Tests cover exact quantities, inventory, time zones and DST, independent dose identities, favorite deduplication, account isolation, conflicts, backup restoration and symptom exports.
+
+Reference-curve tests check formulation and analyte identity, units, study peaks, selected total/partial exposure benchmarks, delayed release and invalid-input boundaries. Passing these engineering checks does not establish clinical validity or accurate individual predictions. A [bounded privacy/security crosscheck](docs/reference-expansion-security-review-2026-09-14.md) covers the new static references, chart switching, guide delivery and username display.
 
 Browser checks and known limits are recorded in [interface QA](docs/qa-interface-review.md), [data QA](docs/qa-data.md) and [medical QA](docs/qa-medical.md). Responsive browser testing is not a claim of testing every physical phone or operating system.
 

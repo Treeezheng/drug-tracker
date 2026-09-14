@@ -1,5 +1,5 @@
 import { products } from './catalog';
-import { concentrationAnalyte, CONCERTA_TRACE, contributesToGroup, doseTimestamp, modelGroup, referenceForDose } from './model';
+import { concentrationAnalyte, concentrationAnalytes, CONCERTA_TRACE, contributesToGroup, doseTimestamp, modelGroup, pkReferenceForDose, referenceForDose } from './model';
 import { hasMissingTimelineData } from './timeline-data';
 import { estimateContribution } from './timeline-estimates';
 import type { Dose } from './types';
@@ -33,6 +33,7 @@ function maximumKnownContribution(dose: Dose, start: number, end: number, publis
   if (!Number.isFinite(admin)) return 0;
   const product = products.find(p => p.id === dose.productId);
   const reference = referenceForDose(dose);
+  const pkReference=pkReferenceForDose(dose);
   const elapsedHours: number[] = [];
   if (modelGroup(dose).reference || reference) {
     if (product?.model === 'concerta' || reference?.referenceProductId === 'concerta') elapsedHours.push(...CONCERTA_TRACE.map(([hours]) => hours));
@@ -40,14 +41,18 @@ function maximumKnownContribution(dose: Dose, start: number, end: number, publis
       const elimination = Math.LN2 / 3.5, absorption = 1.0152449556;
       elapsedHours.push(Math.log(absorption / elimination) / (absorption - elimination));
     }
+  } else if(pkReference) {
+    elapsedHours.push(...pkReference.channels.flatMap(channel=>[channel.peakHours,channel.lagHours??0,...(channel.points??[]).map(([time])=>time)]));
   } else if (dose.assumptions?.accepted) {
     elapsedHours.push(dose.assumptions.lagHours, dose.assumptions.lagHours + dose.assumptions.peakHours);
   }
   const points = [start, end, ...elapsedHours.map(hours => admin + hours * 3_600_000)]
     .filter(at => Number.isFinite(at) && at >= start && at <= end);
   return Math.max(0, ...points.map(at => {
-    const value = estimateContribution(dose, at, modelGroup(dose).group, publishedOnly)?.value;
-    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    return Math.max(0,...[modelGroup(dose).group,...concentrationAnalytes(dose).map(item=>item.group)].map(group=>{
+      const value=estimateContribution(dose,at,group,publishedOnly)?.value;
+      return typeof value==='number'&&Number.isFinite(value)?value:0;
+    }));
   }));
 }
 
@@ -99,6 +104,7 @@ export function scopeTimeline({ actual, drafts, start, end, publishedOnly = fals
   const sourceIds = [...new Set(doses.flatMap(dose => [
     ...(products.find(p => p.id === dose.productId)?.sourceIds ?? []),
     ...(referenceForDose(dose)?.sourceIds ?? []),
+    ...(pkReferenceForDose(dose)?.sourceIds ?? []),
   ]))];
   return {
     doses,

@@ -1,0 +1,68 @@
+import type { Source } from './types';
+
+export const COMMON_STIMULANT_PK_SOURCES: Source[] = [
+  {
+    id: 'F1',
+    title: 'Focalin IR — FDA clinical pharmacology review in medical review, 2001',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/nda/2001/21-278_Focalin_medr_P1.pdf',
+    section: 'Study PK-00-001; Table 2-2, printed p. 26 of 51; Table 3-5, p. 39',
+    reviewed: '2026-09-14',
+    note: 'Single fasted 20 mg dexmethylphenidate HCl IR dose, 15 healthy adults: d-MPH Cmax 23.7 ng/mL, Tmax 1.5 h, terminal half-life 2.7 h, AUCinf 120.9 ng·h/mL. The app-fitted absorption lag is not a study measurement. The inactive d-ritalinic-acid metabolite and fed results are excluded.',
+  },
+  {
+    id: 'F2',
+    title: 'Focalin XR — FDA clinical pharmacology review, study 2101',
+    url: 'https://www.fda.gov/media/80207/download',
+    section: 'Figure 3 and Tables 19–20, printed pp. 29, 32–33 of 140 (PDF pp. 23–25)',
+    reviewed: '2026-09-14',
+    note: 'Fasted adult XR 20 mg, N=24. Reviewer-calculated peak/minimum metrics and sponsor partial/total AUC describe the same treatment. The app combines summary landmarks with coarse figure readings as an explicit construction. Table 20 also supplies the separate 10 mg IR first-dose AUC0–4 comparison. A reported assay quality-control caveat and mean-curve/mean-peak distinction limit precision.',
+  },
+  {
+    id: 'F3',
+    title: 'Dyanavel XR tablets — FDA multidisciplinary review',
+    url: 'https://www.fda.gov/media/155563/download',
+    section: 'Clinical pharmacology appendix, Tables 1–4, pp. 31–34; Table 4 spans pp. 33–34',
+    reviewed: '2026-09-14',
+    note: 'Table 4 gives the swallowed-whole fasted 20 mg tablet arm (N=32), distinct from chewed tablets and suspension: d/l Cmax 53.4/17.2, AUC0–5 176/55, total AUC 1215/481. The app fits a two-segment rise to the early AUC rather than borrowing a mixed-salts IR or XR curve.',
+  },
+  {
+    id: 'F4',
+    title: 'Dyanavel XR — DailyMed prescribing information',
+    url: 'https://dailymed.nlm.nih.gov/dailymed/fda/fdaDrugXsl.cfm?setid=ae304b29-0b40-40ec-ad0d-76b742d4a9b9',
+    section: '§12.3 Pharmacokinetics: extended-release tablets and elimination',
+    reviewed: '2026-09-14',
+    note: 'The labeled tablet dose is amphetamine base. Separate d/l tablet terminal half-life summaries are 13.5/17.3 h. Suspension half-lives and dose presentation differ and are not silently substituted. The label permits chewing or swallowing tablets whole.',
+  },
+  {
+    id: 'F5',
+    title: 'Mydayis — FDA multidisciplinary review, adult pharmacokinetic comparison',
+    url: 'https://www.fda.gov/media/132150/download?attachment=',
+    section: 'Table 2, p. 15; adult single-dose row (19–52 years, N=20)',
+    reviewed: '2026-09-14',
+    note: 'Adult 37.5 mg single dose: d/l Cmax 50.3/14.7 ng/mL, mean Tmax 8.2/8.4 h, AUCinf 1085/373 ng·h/mL, half-life 10.1/12.5 h. The pediatric and repeated-dose rows are excluded. These are labeled mixed-salt doses, not free-base amounts.',
+  },
+  {
+    id: 'F6',
+    title: 'Mydayis — FDA prescribing information, concentration figure',
+    url: 'https://www.fda.gov/media/142062/download?attachment=',
+    section: '§12.3; Figure 1, p. 15, Mydayis 37.5 mg circles (N=20)',
+    reviewed: '2026-09-14',
+    note: 'The app uses approximate readings of Mydayis circle markers for rise/decline and inserts the FDA review summary peaks. The square-marker MAS-ER plus later MAS-IR comparator is not used. Peak-of-mean and mean-of-peaks differ; interpolation and post-60-hour tails remain constructed.',
+  },
+  {
+    id: 'F7',
+    title: 'Evekeo IR and ODT — FDA clinical pharmacology review, study AR17.001',
+    url: 'https://www.fda.gov/media/148768/download',
+    section: 'Figures 1–2, pp. 8–9; adult study design, pp. 14–16; arithmetic-mean tables, pp. 20 and 22',
+    reviewed: '2026-09-14',
+    note: '20 mg labeled racemic amphetamine sulfate, treatment B ODT dissolved without water (N=40) and C conventional tablets with water (N=39). The reference keeps each formulation and each analyte separate, using arithmetic means rather than the adjacent geometric means. Coarse figure anchors are application approximations. AUClast is not total AUC; sample Tlast varies by analyte.',
+  },
+  {
+    id: 'F8',
+    title: 'Dyanavel XR suspension — FDA clinical pharmacology review, 2015',
+    url: 'https://www.fda.gov/media/95789/download',
+    section: 'Study 2014-3401: dose description PDF p. 45; tables/figures pp. 49–52; partial AUC Tables 5 and 7, printed pp. 18–19',
+    reviewed: '2026-09-14',
+    note: 'Fasted treatment A (N=29): one 7.5 mL dose, 18.8 mg rounded from 18.75 mg amphetamine base. Arithmetic-mean d/l AUCinf 1197.321/461.544; AUC0–4 143.813/45.013; AUC0–5 195.695/61.642. The 20 mg per 8 mL formulation description is not the administered amount. The app combines summary peaks with approximate rise/decline anchors and estimated tails.',
+  },
+];

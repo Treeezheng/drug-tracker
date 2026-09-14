@@ -35,11 +35,11 @@ test('scaled estimates expose 5/20 mg IR and 36 mg Concerta numbers, with unvali
   assert.equal(limited.complete,false);assert.equal(hasKnownTotal(limited,start+72*hour),false);
 });
 
-test('unknown items remain missing and distinct analytes, relative illustrations, salts and liquids never borrow a reference',()=>{
-  const generic=dose('methylphenidate-ir','10'),unknown=dose('methylin-solution','1');
+test('unsupported formulations remain missing and never borrow another product reference',()=>{
+  const generic=dose('methylphenidate-ir','10'),unknown=dose('daytrana','10');
   const mixed=estimateTotals([generic,unknown],peak).Methylphenidate;
   assert.equal(mixed.value,4.3);assert.equal(mixed.complete,false);assert.equal(mixed.hasReference,true);
-  for(const item of [unknown,dose('amphetamine-salts-ir','10'),dose('dexmethylphenidate-ir','5'),dose('metformin-ir','500')]){
+  for(const item of [unknown,dose('adzenys-xr-odt','9.4'),dose('xelstrym','4.5'),dose('metformin-ir','500')]){
     for(const total of Object.values(estimateTotals([item],peak))){assert.equal(total.hasReference,false);assert.equal(total.complete,false);assert.equal(hasKnownTotal(total,peak),false);assert.equal(total.items[0].value,null);}
   }
   assert.equal(estimateContribution(generic,peak,'Dexmethylphenidate'),undefined);
@@ -54,7 +54,7 @@ test('bad input cannot become zero, and a future zero cannot hide an already unk
     const bad={...dose('methylphenidate-ir','10'),...patch},total=estimateTotals([bad],peak).Methylphenidate;
     assert.equal(total.items[0].value,null);assert.equal(total.hasReference,false);assert.equal(hasKnownTotal(total,peak),false);
   }
-  const unknown=dose('methylin-solution','1'),future={...dose('methylphenidate-ir','10'),administeredAt:new Date(peak+hour).toISOString()};
+  const unknown=dose('daytrana','10'),future={...dose('methylphenidate-ir','10'),administeredAt:new Date(peak+hour).toISOString()};
   assert.equal(hasKnownTotal(estimateTotals([unknown,future],peak).Methylphenidate,peak),false);
   assert.deepEqual(estimateTotals([{...future,status:'skipped'}],peak),{});
 });

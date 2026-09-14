@@ -10,7 +10,7 @@
 .favorite-picker .fp-name { grid-column: 1; padding-top: 10px; min-width: 0; }
 .favorite-picker .fp-name h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .favorite-picker .fp-product { grid-column: 2; }
-.favorite-picker .fp-brand { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-style: italic; line-height: 1.45; }
+.favorite-picker .fp-brand { display: block; margin: 3px 0 0; color: var(--muted); font-size: 12px; font-style: italic; line-height: 1.45; }
 .favorite-picker .fp-formulation { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .favorite-picker .fp-variant { display: block; margin-top: 5px; max-width: 220px; }
 .favorite-picker .fp-variant select { width: 100%; min-height: 44px; color: var(--muted); font-size: 13px; font-style: italic; }

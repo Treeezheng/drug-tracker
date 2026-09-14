@@ -529,6 +529,30 @@ tr:last-child td { border-bottom: 0; }
 .settings-toggles { display: grid; gap: 4px; min-width: 0; }
 .settings-section .setting-with-help { margin-block: 0; }
 .settings-toggles > .setting-with-help { min-height: 44px; }
+.personal-settings-footer, .personal-settings-weekend-body { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
+.personal-settings-weekend { border-top: 1px solid #eceef1; }
+.personal-settings-weekend > summary { min-height: 44px; padding-block: 11px; }
+.personal-settings-weekend-body .check-line { min-height: 44px; }
+.personal-settings-save { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; min-width: 0; gap: 8px; }
+.personal-settings-save > .button { flex-shrink: 0; min-height: 44px; max-width: 100%; justify-content: flex-start; text-align: left; }
+.personal-settings-save > p { flex-basis: 100%; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.personal-settings-save > .settings-saved-inline { flex-basis: auto; }
+.chart-view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 16px 24px; border-bottom: 1px solid var(--border); }
+.chart-view-controls[hidden] { display: none; }
+.chart-view-controls > .field { flex: 1 1 220px; min-width: 0; max-width: 360px; }
+.chart-view-controls > p { flex: 2 1 260px; margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.chart-view-controls a { color: var(--accent); text-underline-offset: 3px; }
+.chart-analyte-choice { padding: 16px 24px 0; }
+.chart-analyte-choice .field { max-width: 320px; }
+.chart-view-controls select, .chart-analyte-choice select { min-height: 44px; max-width: 100%; }
+.chart-unavailable { margin: 0; padding: 0 24px 16px; color: var(--muted); font-size: 13px; }
+@media(max-width:700px) {
+  .chart-view-controls { padding: 16px; gap: 8px; }
+  .chart-analyte-choice { padding: 16px 16px 0; }
+  .chart-view-controls > .field, .chart-analyte-choice .field { max-width: none; width: 100%; }
+  .chart-view-controls select, .chart-analyte-choice select { font-size: 16px; }
+  .chart-unavailable { padding-inline: 16px; }
+}
 .settings-medication-action { display: flex; align-items: center; justify-content: flex-start; min-width: 0; }
 .settings-medication-action > .button { justify-content: flex-start; align-items: center; max-width: 100%; text-align: left; }
 .history-records-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; }

@@ -1,5 +1,6 @@
 import { products } from './catalog';
 import type { Assumptions, Dose, Product } from './types';
+import { evaluatePkReference, pkProfileForProduct } from './pk-references';
 
 export const MODEL_VERSION = '2026-09-13.1';
 export const RITALIN_REFERENCE = Object.freeze({amplitude:4.3,peakHours:2,halfLifeHours:3.5,absorptionRate:1.0152449556});
@@ -59,10 +60,17 @@ function eligibleReference(dose:Dose,p:Product):boolean {
 }
 /** Analyte identity is independent of dose/formulation model eligibility. */
 export function concentrationAnalyte(dose:Dose):{group:string;unit:string}|null {
+  return concentrationAnalytes(dose)[0]??null;
+}
+export function concentrationAnalytes(dose:Dose):{group:string;unit:string}[] {
   const product=products.find(item=>item.id===dose.productId);
-  // This is the only physical concentration analyte currently implemented.
-  // Do not infer it from a historical name, or merge dex/enantiomer/prodrug families.
-  return product?.family==='Methylphenidate'?{group:'Methylphenidate',unit:'ng/mL'}:null;
+  const profile=pkProfileForProduct(dose.productId);
+  if(profile)return profile.channels.map(channel=>({group:channel.group,unit:'ng/mL'}));
+  const groups=product?.family==='Methylphenidate'?['Methylphenidate']:
+    product?.family==='Dexmethylphenidate'?['d-Methylphenidate']:
+    product?.family==='Amphetamine'?['d-Amphetamine','l-Amphetamine']:
+    product?.family==='Dextroamphetamine'||product?.family==='Lisdexamfetamine'?['d-Amphetamine']:[];
+  return groups.map(group=>({group,unit:'ng/mL'}));
 }
 export function modelGroup(dose:Dose):{group:string;unit:string;reference:boolean}{
   const p=products.find(p=>p.id===dose.productId);
@@ -75,7 +83,68 @@ export function modelGroup(dose:Dose):{group:string;unit:string;reference:boolea
 }
 
 export function contributesToGroup(dose:Dose,group:string):boolean {
-  return modelGroup(dose).group===group||concentrationAnalyte(dose)?.group===group;
+  return modelGroup(dose).group===group||concentrationAnalytes(dose).some(analyte=>analyte.group===group);
+}
+
+/** A pinned population reference never overwrites the actual product snapshot. */
+export function pkReferenceForDose(dose:Dose) {
+  const profile=pkProfileForProduct(dose.productId),product=products.find(item=>item.id===dose.productId);
+  if(!profile||!product||dose.status==='skipped'||dose.assumptions?.accepted||modelInputError(dose)
+    ||(dose.modelVersion&&dose.modelVersion!==MODEL_VERSION)||dose.formulation!==product.formulation
+    ||dose.unit!==profile.unit||(dose.strengthUnit!==undefined&&dose.strengthUnit!==profile.strengthUnit)
+    ||dose.unusual)return null;
+  const strength=positiveDecimal(dose.strength),quantity=positiveDecimal(dose.quantity);
+  if(profile.packageReference){
+    if(strength===null||quantity===null||quantity%DECIMAL_SCALE!==0n||dose.amountBasis!=='first listed ingredient'
+      ||!dose.packageStrength||!Array.isArray(dose.ingredients)||dose.ingredients.length!==product.ingredients?.length)return null;
+    const parts=dose.packageStrength.split('/').map(positiveDecimal);
+    const canonical=product.strengths.find(value=>{
+      const expected=value.split('/').map(positiveDecimal);
+      return expected.length===parts.length&&expected.every((part,i)=>part!==null&&part===parts[i]);
+    });
+    const scale=canonical===undefined?undefined:profile.packageReference.scales[canonical];
+    if(scale===undefined||!Number.isFinite(scale)||scale<=0||parts.length!==dose.ingredients.length)return null;
+    if(dose.ingredients.some((ingredient,i)=>{
+      const amount=positiveDecimal(ingredient?.amountMg),part=parts[i];
+      return !ingredient||ingredient.name!==product.ingredients![i].name||ingredient.unit!==profile.strengthUnit
+        ||part===null||amount===null||positiveDecimal(ingredient.strengthMg)!==part||amount*DECIMAL_SCALE!==part*quantity;
+    }))return null;
+    return {...profile,doseScale:scale*Number(dose.quantity)};
+  }
+  if(dose.amountBasis!==undefined&&dose.amountBasis!=='labeled ingredient')return null;
+  if(strength===null||quantity===null||positiveDecimal(dose.packageStrength??dose.strength)!==strength
+    ||!product.strengths.some(value=>positiveDecimal(value)===strength))return null;
+  if(profile.unit!=='mL'&&quantity%DECIMAL_SCALE!==0n
+    &&!(profile.unit==='tablet'&&(profile.fractionalTablets||profile.fractionalStrengths?.some(value=>positiveDecimal(value)===strength))&&quantity%(DECIMAL_SCALE/2n)===0n))return null;
+  return {...profile,doseScale:Number(dose.amountMg)/profile.referenceDoseMg};
+}
+
+/** A view may prepare a validated reference once; no health data is globally cached. */
+export function preparePkReferenceContribution(dose:Dose,group:string,publishedOnly=false) {
+  const profile=pkReferenceForDose(dose),channel=profile?.channels.find(item=>item.group===group);
+  if(!profile||!channel)return null;
+  const admin=doseTimestamp(dose),last=channel.points?.at(-1);
+  const scaleDescription=profile.packageReference
+    ?`${dose.packageStrength} mg package × ${dose.quantity} capsule(s); whole-package reference scale = ${profile.doseScale}.`
+    :`Dose/reference = ${dose.amountMg}/${profile.referenceDoseMg} mg.`;
+  const reason=`${profile.label}; ${profile.population}. ${profile.note} ${scaleDescription} Proportional scaling is an estimate, not a measured personal concentration.`;
+  return (at:number)=>{
+    if(!Number.isFinite(at))return null;
+    const hours=(at-admin)/3_600_000,tail=!!last&&hours>last[0];
+    const value=tail&&publishedOnly?null:evaluatePkReference(channel,hours);
+    const scaled=value===null?null:value*profile.doseScale;
+    return {value:scaled!==null&&Number.isFinite(scaled)?scaled:null,tail,reason};
+  };
+}
+export function pkReferenceContribution(dose:Dose,at:number,group:string,publishedOnly=false) {
+  return preparePkReferenceContribution(dose,group,publishedOnly)?.(at)??null;
+}
+
+/** Only groups with an implemented or explicitly saved curve get concentration plots. */
+export function plotGroups(dose:Dose):string[] {
+  const g=modelGroup(dose);
+  if(g.reference||dose.assumptions?.accepted||referenceForDose(dose))return [g.group];
+  return pkReferenceForDose(dose)?.channels.map(channel=>channel.group)??[];
 }
 export function concentration(dose:Dose, at:number, publishedOnly=false):ModelValue {
   const p=products.find(p=>p.id===dose.productId),g=modelGroup(dose);
@@ -124,7 +193,8 @@ export function referenceForDose(dose:Dose):ReferenceOverlayInfo|null {
     ||dose.unit!=='tablet'||(dose.strengthUnit!==undefined&&dose.strengthUnit!=='mg')
     ||(dose.amountBasis!==undefined&&dose.amountBasis!=='labeled ingredient'))return null;
   const strength=positiveDecimal(dose.strength),quantity=positiveDecimal(dose.quantity);
-  if(strength===null||quantity===null||quantity%DECIMAL_SCALE!==0n
+  const allowedFraction=original.id!=='concerta'&&quantity!==null&&quantity%(DECIMAL_SCALE/2n)===0n;
+  if(strength===null||quantity===null||(quantity%DECIMAL_SCALE!==0n&&!allowedFraction)
     ||positiveDecimal(dose.packageStrength??dose.strength)!==strength
     ||!original.strengths.some(value=>positiveDecimal(value)===strength))return null;
   const referenceDoseMg=reference.id==='concerta'?18:10,doseScale=Number(dose.amountMg)/referenceDoseMg;
@@ -152,11 +222,11 @@ export function contributions(doses:Dose[],at:number,publishedOnly=false){
 export function contributionForGroup(dose:Dose,at:number,group:string,publishedOnly=false):ModelValue|undefined {
   const value=concentration(dose,at,publishedOnly);
   if(value.group===group)return value;
-  const analyte=concentrationAnalyte(dose);
-  if(analyte?.group!==group)return undefined;
+  const analyte=concentrationAnalytes(dose).find(item=>item.group===group);
+  if(!analyte)return undefined;
   const admin=doseTimestamp(dose);
   const knownZero=dose.status==='skipped'||(!modelInputError(dose)&&Number.isFinite(at)&&at<admin);
-  return {...analyte,value:knownZero?0:null,tail:false,evidence:'D',reason:'Concentration unavailable; saved illustration uses relative units'};
+  return {...analyte,value:knownZero?0:null,tail:false,evidence:'D',reason:dose.assumptions?.accepted?'Concentration unavailable; saved illustration uses relative units':'No direct concentration model for this analyte'};
 }
 export function groupedTotals(doses:Dose[],at:number,publishedOnly=false){
   const groups:Record<string,{value:number;complete:boolean;unit:string;tail:boolean;items:ReturnType<typeof contributions>}>= {};
@@ -167,8 +237,7 @@ export function groupedTotals(doses:Dose[],at:number,publishedOnly=false){
   };
   for(const c of contributions(doses,at,publishedOnly)){
     add(c);
-    const analyte=concentrationAnalyte(c.dose);
-    if(analyte&&analyte.group!==c.group)add({dose:c.dose,...contributionForGroup(c.dose,at,analyte.group,publishedOnly)!});
+    for(const analyte of concentrationAnalytes(c.dose))if(analyte.group!==c.group)add({dose:c.dose,...contributionForGroup(c.dose,at,analyte.group,publishedOnly)!});
   }
   return groups;
 }

@@ -29,12 +29,12 @@ test('source illustration follows the recorded instant across midnight without a
   for(const administeredAt of ['', '2026-02-30T08:00:00Z','not-a-time'])assert.equal(referenceForDose({...original,administeredAt}),null);
 });
 
-test('invalid, fractional, altered, custom and unsupported entries never gain the reference overlay',()=>{
+test('invalid, off-half-step, altered, custom and unsupported entries never gain the reference overlay',()=>{
   const original=dose();
   for(const patch of [
     {strength:'2.5',packageStrength:'2.5',quantity:'4'},
     {strength:'20',packageStrength:'20',quantity:'.5'},
-    {quantity:'1.5',amountMg:'15'},
+    {quantity:'1.25',amountMg:'12.5'},
     {amountMg:'0'},{quantity:''},{strength:'NaN'},
     {packageStrength:'5'},{packageStrength:'10/10'},{strengthUnit:'mg/mL'},
     {unit:'mL'},{unusual:true},{formulation:'Extended-release tablet'},

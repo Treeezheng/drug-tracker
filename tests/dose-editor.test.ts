@@ -47,7 +47,7 @@ test('choosing a new formulation replaces old package and model assumptions, the
 
 test('a half 10 mg tablet remains half a tablet with exact labeled 5 mg',()=>{
   const dose=updateDose(newDose('ritalin','10'),{quantity:'.5'},zone);
-  assert.equal(dose.quantity,'0.5');assert.equal(dose.strength,'10');assert.equal(dose.amountMg,'5');assert.equal(dose.unusual,true);
+  assert.equal(dose.quantity,'0.5');assert.equal(dose.strength,'10');assert.equal(dose.amountMg,'5');assert.equal(dose.unusual,undefined);
   assert.equal(doseInputError(dose),'');assert.match(render(dose),/0.5 tablet × 10 mg = 5 mg/);
   assert.doesNotMatch(render(dose),/Record details|Altered administration/);
 });
@@ -57,7 +57,7 @@ test('tablet recording buttons consistently step by halves without granting a sp
     const original=newDose(id,strength);
     assert.equal(quantityStep(original),'0.5',`${id} ${strength}`);
     const half=updateDose(original,{quantity:steppedQuantity(original,-1)!},zone);
-    assert.equal(half.quantity,'0.5');assert.equal(half.unusual,true);
+    assert.equal(half.quantity,'0.5');assert.equal(half.unusual,undefined);
     assert.equal(concentration(half,Date.now()).value,null);
     assert.match(render(half),/>Tablets<\/label>/);
   }
@@ -73,7 +73,7 @@ test('one button increment makes a precise 1.5 tablet snapshot and stock deducts
   const original=freeze({...newDose('ritalin','10'),status:'actual',administeredAt:'2026-09-13T15:00:00Z'});
   const quantity=steppedQuantity(original,1);assert.equal(quantity,'1.5');
   const updated=updateDose(original,{quantity:quantity!},zone);
-  assert.equal(updated.id,original.id);assert.equal(updated.quantity,'1.5');assert.equal(updated.amountMg,'15');assert.equal(updated.packageStrength,'10');assert.equal(updated.ingredients?.[0].amountMg,'15');assert.equal(updated.unusual,true);
+  assert.equal(updated.id,original.id);assert.equal(updated.quantity,'1.5');assert.equal(updated.amountMg,'15');assert.equal(updated.packageStrength,'10');assert.equal(updated.ingredients?.[0].amountMg,'15');assert.equal(updated.unusual,undefined);
   assert.equal(steppedQuantity(updated,-1),'1');assert.equal(original.quantity,'1');assert.equal(doseInputError(updated),'');
   const balance=stockBalances([{id:'supply',productId:'ritalin',productName:'Ritalin IR',packageStrength:'10',strengthUnit:'mg',unit:'tablet',quantity:'30',receivedAt:'2026-09-01T00:00:00Z',timeZone:'UTC',note:''}],[updated],Date.parse('2026-09-14T00:00:00Z'))[0];
   assert.equal(balance.used,'1.5');assert.equal(balance.remaining,'28.5');
@@ -88,7 +88,7 @@ test('quantity increments retain exact four-salt and liquid amounts and never ro
   assert.equal(updateDose(liquid,{quantity:steppedQuantity(liquid,1)!},zone).amountMg,'0.04');
   assert.equal(steppedQuantity({...liquid,quantity:'0.123456789'},1),'0.223456789');
   const capsule=updateDose(newDose('ritalin-la','10'),{quantity:'1.5'},zone);
-  assert.equal(steppedQuantity(capsule,1),'2.5');assert.equal(steppedQuantity(capsule,-1),'0.5');assert.equal(capsule.unusual,true);
+  assert.equal(steppedQuantity(capsule,1),'2.5');assert.equal(steppedQuantity(capsule,-1),'0.5');assert.equal(capsule.unusual,undefined);
   assert.equal(updateDose(newDose('metformin-er','500'),{quantity:'1.5'},zone).amountMg,'750');
 });
 
