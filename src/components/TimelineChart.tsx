@@ -24,7 +24,7 @@ export default function TimelineChart(props:Props){
   const selected=selectedTimelineChoice(choices,choiceId);
   return <><div className="chart-view-controls" hidden={choices.length<2}>
     <label className="field"><span>Medication to display</span><select aria-label="Medication to display" value={selected?.id??''} onChange={event=>setChoiceId(event.target.value)}>{choices.map(choice=><option key={choice.id} value={choice.id}>{choice.label}</option>)}</select></label>
-    <p>One medication view at a time. Different medications are not added into a combined effect. <a href={`${import.meta.env?.BASE_URL??'/drug/'}chart-guide.html`} target="_blank" rel="noreferrer">Why?</a></p>
+    <p>Estimates for the same compound are added together. Other compounds have separate views. <a href={`${import.meta.env?.BASE_URL??'/drug/'}chart-guide.html`} target="_blank" rel="noreferrer">About grouping</a></p>
   </div><TimelinePlot {...props} doses={selected?.doses??props.doses}/></>;
 }
 export function TimelinePlot({doses,date,days,profile,publishedOnly,onMove,onProfile,baseline='empty',hasPendingDose=false,omittedHistoryCount=0,omittedUnknownHistoryCount=0,onAddDose,onSources}:Props){

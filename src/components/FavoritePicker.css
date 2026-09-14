@@ -2,6 +2,7 @@
 .favorite-picker .fp-search { min-height: 44px; }
 .favorite-picker .fp-search input { min-width: 0; min-height: 44px; }
 .favorite-picker .fp-hint { margin: 10px 0 22px; font-size: 13px; color: var(--muted); }
+.medication-recording-only { display: inline-block; margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.4; white-space: nowrap; vertical-align: baseline; }
 .favorite-picker .fp-catalog,
 .favorite-picker .fp-product { min-width: 0; margin: 0; padding: 0; border: 0; }
 .favorite-picker .fp-family + .fp-family { margin-top: 28px; }

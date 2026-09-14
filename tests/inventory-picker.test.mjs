@@ -8,6 +8,7 @@ import * as favorites from '../src/lib/favorites.ts';
 import * as selection from '../src/lib/favorite-selection.ts';
 import * as groups from '../src/lib/grouped-favorite-selection.ts';
 import * as display from '../src/lib/medication-display.ts';
+import * as modelSupport from '../src/lib/medication-model-support.ts';
 import * as strength from '../src/lib/package-strength.ts';
 import * as inventory from '../src/lib/inventory.ts';
 import * as time from '../src/lib/time.ts';
@@ -38,6 +39,7 @@ function fixture(initial = [], saveFavorite) {
       '../lib/catalog': catalog, '../lib/favorites': favorites,
       '../lib/favorite-selection': selection, '../lib/grouped-favorite-selection': groups,
       '../lib/medication-display': display, '../lib/package-strength': strength,
+      '../lib/medication-model-support': modelSupport,
       '../lib/inventory': inventory, '../lib/time': time,
       './MedicationName': { medicationLabel: (_, name) => name }, './Modal': { default: 'Modal' }, ...extra,
     };

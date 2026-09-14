@@ -7,6 +7,7 @@ import * as catalog from '../src/lib/catalog.ts';
 import * as model from '../src/lib/model.ts';
 import * as time from '../src/lib/time.ts';
 import * as display from '../src/lib/medication-display.ts';
+import * as modelSupport from '../src/lib/medication-model-support.ts';
 import * as strength from '../src/lib/package-strength.ts';
 import * as favorites from '../src/lib/favorites.ts';
 
@@ -22,6 +23,7 @@ function fixture(initialFavorites = []) {
     react, 'react/jsx-runtime': { jsx, jsxs: jsx }, 'lucide-react': {},
     '../lib/catalog': catalog, '../lib/model': model, '../lib/time': time,
     '../lib/medication-display': display, '../lib/package-strength': strength,
+    '../lib/medication-model-support': modelSupport,
     '../lib/favorites': favorites, '../lib/scroll-position': { captureScrollPosition: () => () => {} },
     './TimelineChart': { colors: ['#426a95'] }, './MobileTimePicker': { default: 'TimePicker' },
     './DoseFormula': { default: 'DoseFormula' },
