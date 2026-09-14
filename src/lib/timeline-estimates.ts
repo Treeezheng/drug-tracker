@@ -1,11 +1,12 @@
-import { concentrationAnalyte, contributionForGroup, groupedTotals, referenceOverlay } from './model';
+import { concentrationAnalyte, contributionForGroup, groupedTotals, pkReferenceContribution, referenceOverlay } from './model';
 import type { Dose } from './types';
 
 /** Display layer only. Evidence-qualified concentration/groupedTotals stay unchanged. */
 export function estimateContribution(dose:Dose,at:number,group:string,publishedOnly=false) {
   const direct=contributionForGroup(dose,at,group,publishedOnly);
   if(!direct)return undefined;
-  const reference=concentrationAnalyte(dose)?.group===group&&direct.unit==='ng/mL'?referenceOverlay(dose,at,publishedOnly):null;
+  const reference=pkReferenceContribution(dose,at,group,publishedOnly)
+    ??(concentrationAnalyte(dose)?.group===group&&direct.unit==='ng/mL'?referenceOverlay(dose,at,publishedOnly):null);
   return reference
     ?{...direct,value:reference.value,tail:reference.tail,evidence:'D',reason:reference.reason,directValue:direct.value,hasReference:true}
     :{...direct,directValue:direct.value,hasReference:false};

@@ -108,7 +108,7 @@ test('picker presents one ingredient/formulation and deduplicated strengths with
   assert.match(html, /2 strengths selected/);
   assert.equal((html.match(/aria-label="Methylphenidate IR 10 mg"/g) || []).length, 1);
   assert.doesNotMatch(html, /Product for |Also selected:|Curve data:|<select/);
-  assert.match(html, /<h4>Methylphenidate IR<\/h4><p class="fp-formulation">Immediate-release tablet<\/p>/);
+  assert.match(html, /<h4>Methylphenidate IR<\/h4><p class="fp-brand" title="Brand reference">Ritalin<\/p><p class="fp-formulation">Immediate-release tablet<\/p>/);
   assert.match(html, /aria-label="Search brand or ingredient"/);
   assert.doesNotMatch(html, /Preferred strength/);
 });

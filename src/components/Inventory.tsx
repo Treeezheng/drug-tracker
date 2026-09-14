@@ -1,5 +1,5 @@
 import { medicationLabel } from './MedicationName';
-import { medicationDisplay } from '../lib/medication-display';
+import { medicationBrand, medicationDisplay } from '../lib/medication-display';
 import { useId, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import type { Dose, Favorite, InventoryReceipt, Profile } from '../lib/types';
@@ -10,8 +10,8 @@ import { dedupeFavorites } from '../lib/favorites';
 import { favoriteSelection } from '../lib/favorite-selection';
 import FavoritePicker from './FavoritePicker';
 function InventoryMedication({id,name,strength,unit}:{id:string;name:string;strength:string;unit:string}){
-  const display=medicationDisplay({id,name});
-  return <span className="inventory-medication"><span className="inventory-medication-heading"><span className="medication-title">{display.title}</span><span className="inventory-package">{strength} {unit}</span></span>{display.variant&&<small className="medication-brand">{display.variant}</small>}</span>;
+  const display=medicationDisplay({id,name}),brand=medicationBrand(id);
+  return <span className="inventory-medication"><span className="inventory-medication-heading"><span className="medication-title">{display.title}</span><span className="inventory-package">{strength} {unit}</span></span>{brand&&<small className="medication-brand" title="Brand reference">{brand}</small>}</span>;
 }
 export default function Inventory({receipts,doses,favorites,profile,onSave,onRemove,onFavorite,onRemoveFavorite}:{receipts:InventoryReceipt[];doses:Dose[];favorites:Favorite[];profile:Profile;onSave:(r:InventoryReceipt)=>Promise<void>;onRemove:(r:InventoryReceipt)=>Promise<void>;onFavorite:(favorite:Favorite)=>Promise<void>;onRemoveFavorite:(favorite:Favorite)=>Promise<void>}){
   const [favorite,setFavorite]=useState(''),[quantity,setQuantity]=useState(''),[date,setDate]=useState(todayInZone(profile.timeZone)),[error,setError]=useState(''),[busy,setBusy]=useState(false),[note,setNote]=useState('');

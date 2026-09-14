@@ -1,4 +1,4 @@
-import { medicationDisplay } from '../lib/medication-display';
+import { medicationBrand, medicationDisplay } from '../lib/medication-display';
 import type { ReactNode } from 'react';
 
 export function medicationLabel(id: string, name: string): string {
@@ -7,5 +7,6 @@ export function medicationLabel(id: string, name: string): string {
 
 export default function MedicationName({id,name,marker}:{id:string;name:string;marker?:ReactNode}) {
   const display=medicationDisplay({id,name});
-  return <span className="medication-name"><span className="medication-title">{display.title}{marker}</span></span>;
+  const brand=medicationBrand(id);
+  return <span className="medication-name"><span className="medication-title">{display.title}{marker}</span>{brand&&<small className="medication-brand" title="Brand reference">{brand}</small>}</span>;
 }

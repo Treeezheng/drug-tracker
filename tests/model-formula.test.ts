@@ -71,7 +71,7 @@ test('saved accepted illustrations remain read-only and retain their relative sc
   const html=renderToStaticMarkup(createElement(DoseFormula,{dose}));
   assert.doesNotMatch(html,/<(?:input|select|textarea|button)\b/);assert.doesNotMatch(html,/ng\/mL/);
   assert.equal(describeDoseFormula({...dose,assumptions:{...dose.assumptions!,peakHours:NaN}}).kind,'unavailable');
-  assert.equal(describeDoseFormula({...dose,assumptions:{...dose.assumptions!,accepted:false}}).kind,'unavailable');
+  assert.equal(describeDoseFormula({...dose,assumptions:{...dose.assumptions!,accepted:false}}).kind,'reference-illustration');
   assert.equal(describeDoseFormula({...dose,amountMg:''}).kind,'unavailable');
 });
 

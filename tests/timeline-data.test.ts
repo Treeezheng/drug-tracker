@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import TimelineChart from '../src/components/TimelineChart.tsx';
+import TimelineChart, { TimelinePlot } from '../src/components/TimelineChart.tsx';
 import { newDose } from '../src/components/DoseEditor.tsx';
 import { blankAssumptions, CONCERTA_TRACE, groupedTotals } from '../src/lib/model.ts';
 import { hasKnownTotal, hasMissingTimelineData, timelineReading } from '../src/lib/timeline-data.ts';
@@ -57,7 +57,7 @@ test('unknown sums show a dash; mixed known contributions have a star and never 
 
 test('rendered partial and entirely missing readings have clickable unit-side stars and one shared explanation',()=>{
   const old=dose('concerta',start-48*HOUR),ir={...dose('ritalin',start+10*HOUR),strength:'10',packageStrength:'10',amountMg:'10'};
-  const partial=render([old,ir]);
+  const partial=renderToStaticMarkup(createElement(TimelinePlot,{doses:[old,ir],date:'2026-09-13',days:1,profile,publishedOnly:true,onProfile:()=>{}}));
   assert.match(partial,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
   assert.match(partial,/Known contributions only/);
   assert.equal((partial.match(/class="chart-no-data"/g)||[]).length,1);
@@ -67,10 +67,11 @@ test('rendered partial and entirely missing readings have clickable unit-side st
   const separate=render([ir,dose('metformin-ir',start+HOUR)]);
   const panels=separate.split('class="analyte-panel"');
   assert.doesNotMatch(panels[1],/chart-estimate-note|data-note-link/);
-  assert.match(panels[2],/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
-  assert.doesNotMatch(panels[2].split('class="chart-summary"')[0],/data-note-link/);
+  assert.equal(panels.length,2,'Only the selected medication has a panel.');
+  assert.match(separate,/Medication to display/);
+  assert.match(separate,/Metformin IR/);
   assert.doesNotMatch(separate,/No direct data · Estimated/);
-  assert.equal((separate.match(/\* No drug data/g)||[]).length,1);
+  assert.equal((separate.match(/\* No drug data/g)||[]).length,0);
 });
 
 test('long views mark missing Concerta tail while empty or future-only unmodeled views do not',()=>{

@@ -84,7 +84,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
           {grouped.filter(group => group.family === family).map(group => {
             const product = group.defaultProduct;
             return <section className="fp-product-group" key={group.id}>
-            <div className="fp-name"><h4>{group.title}</h4><p className="fp-formulation">{product.formulation}</p></div>
+            <div className="fp-name"><h4>{group.title}</h4>{group.brand&&<p className="fp-brand" title="Brand reference">{group.brand}</p>}<p className="fp-formulation">{product.formulation}</p></div>
             <fieldset className="fp-product">
               <legend className="sr-only">{group.title} strengths</legend>
               <div className="fp-strengths">{groupStrengths(group, favorites, selection).map(strength => {

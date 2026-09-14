@@ -67,6 +67,7 @@ async function publicFixture(t,{beforeStart}={}){
   await Promise.all([
     writeFile(join(dist,'index.html'),'<meta name="drug-edition" content="cloud"><title>Original index</title>'),
     writeFile(join(dist,'privacy.html'),'<title>Original privacy</title>'),
+    writeFile(join(dist,'chart-guide.html'),'<title>Original chart guide</title>'),
     writeFile(join(dist,'LICENSE'),'Original public license'),
     writeFile(join(dist,'THIRD_PARTY_NOTICES.txt'),'Original public third-party notices'),
     writeFile(join(dist,'robots.txt'),'Original robots'),
@@ -89,14 +90,15 @@ test('public responses use startup snapshots after files and ancestor directorie
     await symlink(outside,join(dist,'assets','linked-directory'));
     await symlink(join(outside,'secret.txt'),join(dist,'assets','linked-file.js'));
     await writeFile(join(dist,'private.txt'),'SYNTHETIC FILE NOT IN PUBLIC ALLOWLIST');
+    await writeFile(join(dist,'private.html'),'<title>Private document</title>');
   }});
   const expected=new Map();
-  for(const path of ['/drug/','/drug/privacy.html','/drug/LICENSE','/drug/THIRD_PARTY_NOTICES.txt','/robots.txt','/drug/build-info.json','/drug/assets/app-AbCdEf12.js'])expected.set(path,(await f.get(path)).text);
-  for(const name of ['index.html','privacy.html','LICENSE','THIRD_PARTY_NOTICES.txt','robots.txt','build-info.json']){await rename(join(f.dist,name),join(f.dist,`${name}.old`));await symlink(join(f.outside,'secret.txt'),join(f.dist,name));}
+  for(const path of ['/drug/','/drug/privacy.html','/drug/chart-guide.html','/drug/LICENSE','/drug/THIRD_PARTY_NOTICES.txt','/robots.txt','/drug/build-info.json','/drug/assets/app-AbCdEf12.js'])expected.set(path,(await f.get(path)).text);
+  for(const name of ['index.html','privacy.html','chart-guide.html','LICENSE','THIRD_PARTY_NOTICES.txt','robots.txt','build-info.json']){await rename(join(f.dist,name),join(f.dist,`${name}.old`));await symlink(join(f.outside,'secret.txt'),join(f.dist,name));}
   await rename(join(f.dist,'assets'),join(f.dist,'old-assets'));await symlink(f.outside,join(f.dist,'assets'));
   await writeFile(join(f.dist,'new-file.json'),'{"mustNotBecomePublic":true}');
   for(const[path,text]of expected){const response=await f.get(path);assert.equal(response.status,200);assert.equal(response.text,text);assert.doesNotMatch(response.text,/PRIVATE CONTENT/);}
-  for(const path of ['/drug/private.txt','/drug/new-file.json','/drug/assets/linked-file.js','/drug/assets/linked-directory/app-AbCdEf12.js','/drug/assets/../private.txt','/drug/assets/%2e%2e%2fprivate.txt','/drug/%2fprivate.txt'])assert.equal((await f.get(path)).status,404);
+  for(const path of ['/drug/private.txt','/drug/private.html','/drug/new-file.json','/drug/assets/linked-file.js','/drug/assets/linked-directory/app-AbCdEf12.js','/drug/assets/../private.txt','/drug/assets/%2e%2e%2fprivate.txt','/drug/%2fprivate.txt'])assert.equal((await f.get(path)).status,404);
 });
 
 test('every current public build file is served byte-for-byte as declared by the generated release manifest',async t=>{
@@ -114,6 +116,10 @@ test('every current public build file is served byte-for-byte as declared by the
   const manifest=JSON.parse((await f.get('/drug/build-info.json')).text);
   for(const name of ['LICENSE','THIRD_PARTY_NOTICES.txt','apple-touch-icon.png','icon-192.png','icon-512.png','site.webmanifest'])assert.ok(Object.hasOwn(manifest.files,name));
   assert.equal((await f.get('/drug/site.webmanifest')).headers['content-type'],'application/manifest+json');
+  const guide=await f.get('/drug/chart-guide.html');
+  assert.equal(guide.status,200);assert.equal(guide.headers['cache-control'],'no-store');
+  assert.match(guide.headers['content-security-policy'],/script-src 'none'/);
+  assert.equal((await f.get('/drug/chart-guide.html','HEAD')).body.length,0);
   for(const [name,expected] of Object.entries(manifest.files)){
     const response=await f.get(`/drug/${name}`);
     assert.equal(response.status,200,name);

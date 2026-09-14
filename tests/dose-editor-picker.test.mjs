@@ -77,5 +77,5 @@ test('saving an unchanged picker preserves the dose; a generic tablet plus butto
   assert.ok(plus); plus.props.onClick({ currentTarget: {} });
   assert.equal(view.props.dose.quantity, '1.5');
   assert.equal(view.props.dose.amountMg, '15');
-  assert.equal(view.props.dose.unusual, true);
+  assert.equal(view.props.dose.unusual, undefined);
 });

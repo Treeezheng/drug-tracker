@@ -141,7 +141,8 @@ test('different analytes and relative illustrations remain separate from methylp
   const mph = fixture('ritalin');
   const amphetamine = fixture('adderall-ir', { id: 'synthetic-amphetamine', assumptions: { ...blankAssumptions(), accepted: true } });
   const groups = groupedTotals([mph, amphetamine], START + 2 * HOUR);
-  assert.equal(Object.keys(groups).length, 2);
+  assert.equal(Object.keys(groups).length, 4);
+  assert.equal(groups['d-Amphetamine'].complete,false);assert.equal(groups['l-Amphetamine'].complete,false);
   assert.equal(modelGroup(amphetamine).reference, false);
   close(groups.Methylphenidate.value, 4.3);
   assert.equal(groups[modelGroup(amphetamine).group].unit, 'relative units');
@@ -152,7 +153,7 @@ test('Level D needs explicit acceptance; four independent rows sum on a fixed re
   const assumed = fixture('vyvanse-capsule', { assumptions: { ...blankAssumptions(), peakHours: 2, halfLifeHours: 3, lagHours: 0, amplitude: 2, referenceDose: 10, accepted: false } });
   assert.equal(concentration(assumed, START + 2 * HOUR).value, null);
   const doses = Array.from({ length: 4 }, (_, i) => ({ ...assumed, id: `synthetic-assumed-${i}`, assumptions: { ...assumed.assumptions!, accepted: true } }));
-  const group = modelGroup(assumed).group;
+  const group = modelGroup(doses[0]).group;
   close(groupedTotals(doses, START + 2 * HOUR)[group].value, 8);
   close(groupedTotals(doses.filter((dose) => dose.id !== 'synthetic-assumed-1'), START + 2 * HOUR)[group].value, 6);
   const moved = doses.map((dose, i) => i === 2 ? { ...dose, administeredAt: new Date(START + HOUR).toISOString() } : dose);

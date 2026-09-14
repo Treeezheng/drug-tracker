@@ -1,4 +1,8 @@
 import type { Product, Source } from './types';
+import { NONSTIMULANT_PK_SOURCES } from './pk-reference-nonstimulant-sources';
+import { COMMON_MPH_PK_SOURCES } from './pk-reference-common-mph';
+import { AMPHETAMINE_PK_SOURCES } from './pk-reference-amphetamine-sources';
+import { COMMON_STIMULANT_PK_SOURCES } from './pk-reference-common-stimulant-sources';
 
 const reviewed = '2026-09-13';
 const label = (id:string, title:string, url:string, note:string, section='Dosage forms / Description; Clinical pharmacology'):Source => ({id,title,url,section,reviewed,note});
@@ -7,6 +11,10 @@ const dm = (setId:string) => `https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm
 // Label presence, FDA approval, present marketing and pharmacy stock are different facts.
 // Evidence describes the implemented model, not the existence of product-specific evidence.
 export const sources:Source[] = [
+  ...AMPHETAMINE_PK_SOURCES,
+  ...COMMON_MPH_PK_SOURCES,
+  ...NONSTIMULANT_PK_SOURCES,
+  ...COMMON_STIMULANT_PK_SOURCES,
   label('S1','Concerta — FDA prescribing information, February 2026','https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/021121s34s40s45lbl.pdf','Figure 1 is a group mean after one 18 mg dose. The reconstructed trace and estimated terminal tail have different provenance. Dose scaling is an approximation.','§§12.2–12.3; Figure 1; Table 7; §3'),
   label('S2','Ritalin IR — DailyMed prescribing information',dm('c0bf0835-6a2f-4067-a158-8b86c4b0668a'),'10 mg reference: approximate Cmax 4.3 ± 2.3 ng/mL and average Tmax 2 h. The application curve is a constructed model, not published raw data.','§§3, 12.3'),
   label('S3','Ritalin LA — FDA prescribing information, 2025','https://www.accessdata.fda.gov/drugsatfda_docs/label/2025/021284s050lbl.pdf','Adult Ritalin-tablet half-life about 3.5 h (range 1.3–7.7 h); the LA two-pulse formulation needs its own model.','§§3, 12.3; Figure 1; Table 4'),
@@ -55,7 +63,7 @@ export const sources:Source[] = [
 ];
 
 const unverified = 'Label referenced; current marketing and stock unverified';
-const assumedNote = 'No product-specific model is implemented. An illustration requires explicitly accepted assumptions; it is not a prediction of this medicine.';
+const assumedNote = 'Concentration estimates use an identified reference when one is implemented. Otherwise, dose times are shown without a concentration estimate.';
 function product(id:string,name:string,generic:string,formulation:string,family:string,strengths:string[],sourceIds:string[],extra:Partial<Product>={}):Product {
   return {id,name,generic,formulation,family,strengths,sourceIds,unit:'tablet',strengthUnit:'mg',manufacturer:'Confirm labeler on package',evidence:'D',model:'assumption',route:'oral',status:unverified,note:assumedNote,...extra};
 }

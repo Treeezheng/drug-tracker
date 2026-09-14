@@ -1,35 +1,48 @@
 import type { Dose } from './types';
-import { estimateTotals } from './timeline-estimates';
-import { hasKnownTotal } from './timeline-data';
-import { doseTimestamp, referenceForDose } from './model';
+import { estimateContribution } from './timeline-estimates';
+import { doseTimestamp, includeTimelineDose, pkReferenceForDose, preparePkReferenceContribution, referenceForDose } from './model';
 
 export const isHistoryDose=(dose:Dose,start:number)=>dose.status==='actual'&&doseTimestamp(dose)<start;
 
 /** View-owned samples: reuse the same evaluated contributions for the total and
  * individual paths. No plaintext records or samples survive in a global cache. */
 export function sampleTimelinePanel(members:Dose[],group:string,times:number[],publishedOnly:boolean) {
-  const curves=members.map(dose=>({dose,reference:!!referenceForDose(dose),values:[] as (number|null)[]}));
-  let max=1;
+  const curves=members.map(dose=>({dose,reference:!!referenceForDose(dose)||!!pkReferenceForDose(dose),values:[] as (number|null)[]}));
+  const seen=new Set<string>();
+  const evaluations=curves.map(curve=>{
+    if(seen.has(curve.dose.id)||!includeTimelineDose(curve.dose))return null;
+    seen.add(curve.dose.id);
+    const prepared=preparePkReferenceContribution(curve.dose,group,publishedOnly);
+    return {admin:doseTimestamp(curve.dose),at:(at:number)=>prepared
+      ? {...prepared(at),unit:'ng/mL',hasReference:true}
+      : estimateContribution(curve.dose,at,group,publishedOnly)};
+  });
+  let max=0;
   const series=times.map(at=>{
-    const total=estimateTotals(members,at,publishedOnly)[group];
-    const items=new Map(total?.items.map(item=>[item.dose,item]));
-    for(const curve of curves){
-      const value=items.get(curve.dose)?.value??null;
-      curve.values.push(value);
-      if(curve.reference&&value!==null)max=Math.max(max,value);
-    }
-    max=Math.max(max,total?.value??0);
-    // Keep only plotting metadata, rather than retaining every record's model
-    // result 289 times. Unknown/partial totals retain the existing semantics.
-    return {value:total?.value??0,unit:total?.unit??'',known:hasKnownTotal(total,at),
-      complete:total?.complete??false,tail:total?.tail??false,hasReference:total?.hasReference??false};
+    let value=0,unit='',complete=true,tail=false,hasReference=false,known=false,count=0;
+    curves.forEach((curve,i)=>{
+      const result=evaluations[i]?.at(at),current=result?.value??null;
+      curve.values.push(current);
+      if(!result)return;
+      count++;unit=result.unit;complete&&=current!==null;tail||=result.tail??false;hasReference||=result.hasReference;
+      if(current!==null){
+        value+=current;
+        known||=evaluations[i]!.admin<=at;
+        if(curve.reference)max=Math.max(max,current);
+      }
+    });
+    max=Math.max(max,value);
+    complete&&=count>0;
+    return {value,unit,known:known||complete,complete,tail,hasReference};
   });
   return {series,curves,max};
 }
 
 export function timelinePanelGeometry(samples:ReturnType<typeof sampleTimelinePanel>,times:number[],width:number,height:number,start:number,end:number) {
   const {series,curves,max}=samples,unit=series[0]?.unit??'';
-  const ceiling=unit==='ng/mL'?Math.max(6,Math.ceil(max*1.1/2)*2):Math.max(2,Math.ceil(max*1.1));
+  const smallScale=max>0&&max<1?10**Math.floor(Math.log10(max*1.1)):0;
+  const smallCeiling=smallScale?[1,2,5,10].find(step=>step*smallScale>=max*1.1)!*smallScale:0;
+  const ceiling=unit==='ng/mL'?(smallCeiling||Math.max(6,Math.ceil(max*1.1/2)*2)):Math.max(2,Math.ceil(max*1.1));
   const x=(t:number)=>40+(t-start)/(end-start)*(width-64);
   const y=(value:number)=>36+(height-74)*(1-value/ceiling);
   const path=(values:(number|null)[])=>{

@@ -8,6 +8,18 @@ import { favoriteSelection, favoriteChanges } from '../src/lib/favorite-selectio
 import { selectGroupStrength, groupStrengthSelected } from '../src/lib/grouped-favorite-selection.ts';
 import DoseEditor, { doseStrengthChoices, newDose, selectDoseMedication } from '../src/components/DoseEditor.tsx';
 import { modelGroup } from '../src/lib/model.ts';
+import MedicationName from '../src/components/MedicationName.tsx';
+import { medicationBrand } from '../src/lib/medication-display.ts';
+
+test('recognizable brand references appear beneath generic names without altering product identity',()=>{
+  for(const [id,brand] of [['amphetamine-salts-ir','Adderall IR'],['methylphenidate-ir','Ritalin'],['dexmethylphenidate-ir','Focalin IR'],['atomoxetine','Strattera'],['clonidine-er','Kapvay']]){
+    const product=getProduct(id),before=structuredClone(product);
+    const html=renderToStaticMarkup(createElement(MedicationName,{id,name:product.name}));
+    assert.equal(medicationBrand(id),brand);assert.ok(html.includes(`title="Brand reference">${brand}</small>`));
+    assert.deepEqual(product,before);
+  }
+  assert.equal(medicationBrand('concerta'),undefined,'No duplicate brand under a product already named Concerta.');
+});
 
 test('corresponding brand and generic entries share a display name but distinct formulations do not', () => {
   assert.deepEqual(medicationDisplay(getProduct('ritalin')), { groupId: 'methylphenidate-ir-display', title: 'Methylphenidate IR', variant: 'Ritalin', label: 'Methylphenidate IR · Ritalin' });

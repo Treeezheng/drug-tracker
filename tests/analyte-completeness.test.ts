@@ -57,7 +57,7 @@ test('generic and other methylphenidate formulations qualify a brand reference s
 test('unrelated compounds and enantiomer families do not contaminate the methylphenidate total',()=>{
   const known=dose('ritalin','10');
   for(const unknown of [dose('metformin-ir','500'),dose('adderall-ir','5'),dose('focalin','5'),dose('azstarys','26.1/5.2')]){
-    assert.equal(concentrationAnalyte(unknown),null);
+    assert.notEqual(concentrationAnalyte(unknown)?.group,'Methylphenidate');
     const total=groupedTotals([known,unknown],at,true).Methylphenidate;
     assert.equal(total.complete,true);assert.equal(total.items.length,1);assert.equal(timelineReading(total,at),'4.30');
   }
@@ -74,14 +74,16 @@ test('saved relative illustrations cannot masquerade as physical concentrations 
   const totals=groupedTotals(scoped.doses,at,true);
   assert.equal(timelineReading(totals.Methylphenidate,at),'4.30*');
   assert.equal(totals[relative.group].value,relative.value);
-  const html=render([unknown,known]),panels=html.split('class="analyte-panel"');
-  assert.equal(panels.length,3);assert.match(html,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
+  const html=render([known,unknown]),panels=html.split('class="analyte-panel"');
+  assert.equal(panels.length,2);
+  assert.match(html,/aria-label="Concentration to display"/);
+  assert.ok(html.includes(`<option value="${relative.group}">`));assert.match(html,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
   const physicalPanel=panels.find(panel=>panel.includes('aria-label="Methylphenidate, ng/mL.'));
   assert.ok(physicalPanel,'The physical methylphenidate plot must remain separately identifiable.');
   assert.match(physicalPanel,/ng\/mL · estimate/);
   assert.match(physicalPanel,/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
   assert.doesNotMatch(physicalPanel.split('class="chart-summary"')[0],/No direct data · Estimated/);
-  assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data · Estimated<\/button>/);
+  assert.doesNotMatch(physicalPanel,/Illustrative sum/);
   assert.equal((html.match(/\* No drug data/g)||[]).length,1);
 });
 

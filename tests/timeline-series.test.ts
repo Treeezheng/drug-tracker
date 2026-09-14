@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { newDose } from '../src/components/DoseEditor';
-import { blankAssumptions, contributesToGroup, concentrationAnalyte, includeTimelineDose, modelGroup } from '../src/lib/model';
+import { blankAssumptions, contributesToGroup, concentrationAnalytes, includeTimelineDose, modelGroup } from '../src/lib/model';
 import { estimateContribution, estimateTotals } from '../src/lib/timeline-estimates';
 import { hasKnownTotal } from '../src/lib/timeline-data';
 import { sampleTimelinePanel, timelinePanelGeometry } from '../src/lib/timeline-series';
@@ -12,13 +12,13 @@ const dose=(id:string,strength:string):Dose=>({...newDose(id,strength),status:'a
 
 test('shared chart samples preserve direct, scaled, unknown, future and relative-unit contributions at every boundary',()=>{
   const records=[dose('ritalin','10'),dose('methylphenidate-ir','5'),dose('concerta','18'),dose('concerta','36'),
-    dose('metformin-ir','500'),dose('amphetamine-salts-ir','10'),
+    dose('metformin-ir','500'),dose('amphetamine-salts-ir','10'),dose('clonidine-er','0.1'),dose('jornay-pm','20'),
     {...dose('concerta','18'),administeredAt:'invalid'},
     {...dose('ritalin','10'),administeredAt:new Date(start+48*hour).toISOString()},
     {...dose('ritalin','10'),status:'skipped' as const},
     {...dose('amphetamine-salts-ir','10'),assumptions:{...blankAssumptions(),accepted:true}}];
   const before=structuredClone(records);
-  const groups=new Set(records.flatMap(d=>[modelGroup(d).group,concentrationAnalyte(d)?.group].filter((g):g is string=>!!g)));
+  const groups=new Set(records.flatMap(d=>[modelGroup(d).group,...concentrationAnalytes(d).map(value=>value.group)]));
   const times=[start-1,start,start+2*hour,start+29.976*hour,start+29.976*hour+1,start+32*hour,start+48*hour,start+72*hour];
   for(const publishedOnly of [false,true])for(const group of groups){
     const members=records.filter(d=>includeTimelineDose(d)&&contributesToGroup(d,group));
@@ -32,6 +32,20 @@ test('shared chart samples preserve direct, scaled, unknown, future and relative
     });
   }
   assert.deepEqual(records,before);
+});
+
+test('small ng/mL scales stay readable and duplicate IDs do not double the plotted total',()=>{
+  const d=dose('clonidine-er','0.1'),duplicate={...d},times=[start,start+6.5*hour,start+24*hour];
+  const samples=sampleTimelinePanel([d,duplicate],'Clonidine',times,false);
+  assert.ok(Math.abs(samples.series[1].value-.258)<1e-9);
+  assert.equal(samples.curves[1].values[1],null);
+  const geometry=timelinePanelGeometry(samples,times,393,260,start,start+24*hour);
+  assert.equal(geometry.ceiling,.5);
+  assert.ok(geometry.ceiling>samples.max&&geometry.ceiling<1);
+  const invalid={...d,quantity:'2'};
+  const revised=sampleTimelinePanel([invalid],'Clonidine',times,false);
+  assert.equal(revised.series[1].known,false);assert.equal(revised.series[1].complete,false);
+  assert.equal(revised.curves[0].values[1],null,'A fresh edit must be revalidated, never reuse a previous sample');
 });
 
 test('geometry preserves the observed/estimated split, null gaps, and accepts many curves without argument spreading',()=>{

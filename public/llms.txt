@@ -5,6 +5,7 @@
 ## Public information
 
 - [Simulator](https://treeezh.com/drug/)
+- [Medication charts and reference estimates](https://treeezh.com/drug/chart-guide.html)
 - [Privacy and encryption limits](https://treeezh.com/drug/privacy.html)
 - [Terms of use](https://treeezh.com/drug/terms.html)
 - [Source and security information](https://github.com/Treeezheng/drug-tracker)

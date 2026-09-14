@@ -10,4 +10,4 @@ export interface Favorite {id:string;productId:string;strength:string;packageStr
 export interface Checkin {id:string;date:string;focus?:string;sleepQuality?:string;note?:string;revision?:number;symptoms?:string[];recordedAt?:string;timeZone?:string;}
 export interface InventoryReceipt {id:string;productId:string;productName:string;packageStrength:string;strengthUnit:string;unit:string;quantity:string;receivedAt:string;timeZone:string;note:string;revision?:number;}
 export interface AppData {inventory?:InventoryReceipt[];profile:Profile|null;doses:Dose[];scenarios:Scenario[];favorites:Favorite[];checkins:Checkin[];}
-export interface User {id:string;email:string;name:string;}
+export interface User {id:string;email:string;name:string;username?:string;}

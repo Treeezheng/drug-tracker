@@ -1,5 +1,5 @@
 import { products } from './catalog';
-import { CONCERTA_TRACE, MODEL_VERSION, modelGroup, referenceForDose, RITALIN_REFERENCE, validIllustrationParameters } from './model';
+import { CONCERTA_TRACE, MODEL_VERSION, modelGroup, pkReferenceForDose, referenceForDose, RITALIN_REFERENCE, validIllustrationParameters } from './model';
 import type { Dose } from './types';
 
 export interface DoseFormulaDescription {
@@ -16,6 +16,17 @@ export function describeDoseFormula(dose:Dose):DoseFormulaDescription {
   const product=products.find(item=>item.id===dose.productId);
   if(!product)return unavailable();
   if(!Number.isFinite(Number(dose.amountMg))||Number(dose.amountMg)<=0)return unavailable('Complete the strength and quantity to show a formula.');
+  const pkReference=pkReferenceForDose(dose);
+  if(pkReference)return {
+    kind:'reference-illustration',title:`${pkReference.label} · estimated reference`,
+    equations:[pkReference.packageReference
+      ?`C(t) = ${pkReference.doseScale} × Cref(t); ${dose.quantity} capsule(s) of ${dose.packageStrength} mg, referenced to ${pkReference.packageReference.strength} mg`
+      :`C(t) = (${dose.amountMg} / ${pkReference.referenceDoseMg} mg) × Cref(t)`,...new Set(pkReference.channels.map(channel=>channel.points
+      ?'Cref(t): linear interpolation between the listed reference landmarks; after the last point, exponential continuation with the listed half-life.'
+      :'Cref(t) = Cmax × (exp(−kₑu) − exp(−kₐu)) / (exp(−kₑtp) − exp(−kₐtp)); kₑ = ln(2) / half-life, u = t − lag, and kₐ is fitted to tp.'))],
+    parameters:pkReference.channels.flatMap(channel=>[`${channel.group}: Cmax ${channel.cmax} ng/mL; peak ${channel.peakHours} h; half-life ${channel.halfLifeHours} h${channel.lagHours?`; lag ${channel.lagHours} h`:''}`,...(channel.points?[`Reference landmarks (h, ng/mL): ${channel.points.map(point=>`(${point.join(', ')})`).join(', ')}`]:[])]),
+    note:`${pkReference.population}. ${pkReference.note} Time is hours since administration; the curve and dose scaling are estimates, not personal measurements or a prediction of effect. Distinct analytes are kept separate.`,
+  };
   if(!modelGroup(dose).reference){
     const reference=referenceForDose(dose);
     if(reference){

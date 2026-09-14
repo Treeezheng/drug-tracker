@@ -1,0 +1,60 @@
+import type { Source } from './types';
+
+export const AMPHETAMINE_PK_SOURCES: Source[] = [
+  {
+    id: 'A1',
+    title: 'Adderall IR — FDA clinical pharmacology review, 2002',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/nda/2002/11-522s030_adderall_biopharmr.pdf',
+    section: 'Tables 6–8 (review p. 8), Table 13 (p. 11), study 371.102 (pp. 17–19), Table 14 (p. 21)',
+    reviewed: '2026-09-14',
+    note: 'New 10 mg tablet, fasting healthy adults: d-amphetamine Cmax 15.7 ng/mL, Tmax 2.72 h, half-life 10.9 h; l-amphetamine 5.02 ng/mL, 2.89 h, 13.5 h. These are separate analytes. The app constructs smooth curves and scales labeled salt doses; neither the shape nor an individual concentration is validated by this source.',
+  },
+  {
+    id: 'A2',
+    title: 'Dextroamphetamine sulfate IR tablets — DailyMed pharmacokinetics',
+    url: 'https://dailymed.nlm.nih.gov/dailymed/fda/fdaDrugXsl.cfm?setid=ca1a8890-0675-4c9c-9716-6c28f975d827',
+    section: 'Clinical Pharmacology: Pharmacokinetics',
+    reviewed: '2026-09-14',
+    note: '12 healthy subjects, three 5 mg IR tablets: dextroamphetamine Cmax 36.6 ng/mL at approximately 3 h; half-life approximately 12 h. Labeled dose is sulfate salt. Proportional scaling and transfer to an unspecified labeler are application assumptions.',
+  },
+  {
+    id: 'A3',
+    title: 'Dexedrine Spansule — DailyMed pharmacokinetics',
+    url: 'https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=cc717b9b-22ea-4c60-a1d4-ee38a40bce78',
+    section: 'Clinical Pharmacology: Pharmacokinetics',
+    reviewed: '2026-09-14',
+    note: '12 healthy subjects, one 15 mg sustained-release capsule: dextroamphetamine Cmax 23.5 ng/mL at approximately 8 h; half-life approximately 12 h. These capsule parameters must remain separate from the 15 mg IR tablet comparison.',
+  },
+  {
+    id: 'A4',
+    title: 'Arynta / Vyvanse comparison — FDA multidisciplinary review, 2025',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/nda/2025/219847Orig1s000MultidisciplineR.pdf',
+    section: 'Study 2793; Table 1 (p. 31), Table 16 (p. 73); study population (pp. 38, 43)',
+    reviewed: '2026-09-14',
+    note: 'Single 70 mg lisdexamfetamine dimesylate dose, fasted adults, 28 completers. Dextroamphetamine geometric-mean Cmax: capsule 71.75 ng/mL, solution 72.61 ng/mL; median Tmax: 3.70 and 3.42 h. Table 16 AUC0–1.5h: 15.63 and 24.09; AUC0–4h: 163.40 and 182.46; total AUC: 1492.39 and 1479.12 ng·h/mL. Fitted lag parameters are application estimates, not measured absorption delays. The tables do not provide a study-specific dextroamphetamine half-life.',
+  },
+  {
+    id: 'A5',
+    title: 'Vyvanse — FDA prescribing information, September 2025',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/label/2025/021977s054,208510s011lbl.pdf',
+    section: '§12.3 Pharmacokinetics: dose proportionality, absorption, elimination',
+    reviewed: '2026-09-14',
+    note: 'Healthy-adult active-dextroamphetamine half-life 10–11.3 h; the app explicitly selects 11.3 h. Adult linearity is reported at 50–250 mg lisdexamfetamine; lower illustrated doses extrapolate. Lisdexamfetamine parent-drug half-life below 1 h must not be used for the active-dextroamphetamine curve. Capsule and chewable peak timing differ.',
+  },
+  {
+    id: 'A6',
+    title: 'Adderall XR — FDA clinical pharmacology review, 2001',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/nda/2001/21303_Adderall_biopharmr.pdf',
+    section: 'Table 6 and Figure 3 (review p. 12), study 381.103',
+    reviewed: '2026-09-14',
+    note: 'Single 30 mg XR capsule, 19 fasted adult volunteers. d-amphetamine: Cmax 44.3 ng/mL, Tmax 5.2 h, half-life 10.4 h; l-amphetamine: 13.3 ng/mL, 5.6 h, 12.7 h. Food-delayed peaks are separate conditions. The app smooths these parameters and does not reproduce the capsule’s biphasic release or digitize the source figure.',
+  },
+  {
+    id: 'A7',
+    title: 'Vyvanse chewable — FDA clinical pharmacology review, 2017',
+    url: 'https://www.accessdata.fda.gov/drugsatfda_docs/nda/2017/208510Orig1s000ClinPharmR.pdf',
+    section: 'Table 1 and Figure 1 (review p. 4); study 126 Table 4 and demographics (p. 10)',
+    reviewed: '2026-09-14',
+    note: 'Fasted replicated crossover, 18 subjects and 36 observations per formulation. At 60 mg chewable, active d-amphetamine mean Cmax is 56.9 ± 14.7 ng/mL, Tmax 4.4 ± 1.2 h, half-life 12.7 ± 2.3 h, AUC0–4h 135 ± 33.2, AUC0–5h 188 ± 42.2, and AUCinf 1168 ± 270 ng·h/mL. The app fits an estimated lag to the partial AUC; it is not a measured delay. Parent-lisdexamfetamine Cmax 32.3 ng/mL is a different analyte and is not plotted.',
+  },
+];

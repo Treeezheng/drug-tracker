@@ -4,14 +4,26 @@ type DisplayPair = { genericId: string; brandId: string; title: string; brand: s
 // Corresponding ingredient + formulation only. Other release systems remain independent.
 const pairs: readonly DisplayPair[] = [
   { genericId: 'methylphenidate-ir', brandId: 'ritalin', title: 'Methylphenidate IR', brand: 'Ritalin' },
-  { genericId: 'dexmethylphenidate-ir', brandId: 'focalin', title: 'Dexmethylphenidate IR', brand: 'Focalin' },
+  { genericId: 'dexmethylphenidate-ir', brandId: 'focalin', title: 'Dexmethylphenidate IR', brand: 'Focalin IR' },
   { genericId: 'dexmethylphenidate-er', brandId: 'focalin-xr', title: 'Dexmethylphenidate ER capsule', brand: 'Focalin XR' },
-  { genericId: 'amphetamine-salts-ir', brandId: 'adderall-ir', title: 'Mixed amphetamine salts IR', brand: 'Adderall' },
+  { genericId: 'amphetamine-salts-ir', brandId: 'adderall-ir', title: 'Mixed amphetamine salts IR', brand: 'Adderall IR' },
   { genericId: 'amphetamine-salts-er', brandId: 'adderall-xr', title: 'Mixed amphetamine salts ER capsule', brand: 'Adderall XR' },
   { genericId: 'dextroamphetamine-ir', brandId: 'zenzedi', title: 'Dextroamphetamine IR', brand: 'Zenzedi' },
-  { genericId: 'lisdexamfetamine-capsule', brandId: 'vyvanse-capsule', title: 'Lisdexamfetamine capsule', brand: 'Vyvanse' },
-  { genericId: 'lisdexamfetamine-chewable', brandId: 'vyvanse-chewable', title: 'Lisdexamfetamine chewable', brand: 'Vyvanse' },
+  { genericId: 'lisdexamfetamine-capsule', brandId: 'vyvanse-capsule', title: 'Lisdexamfetamine capsule', brand: 'Vyvanse capsule' },
+  { genericId: 'lisdexamfetamine-chewable', brandId: 'vyvanse-chewable', title: 'Lisdexamfetamine chewable', brand: 'Vyvanse chewable' },
 ];
+
+const referenceNames: Record<string, {title:string;brand:string}> = {
+  atomoxetine: {title:'Atomoxetine',brand:'Strattera'},
+  intuniv: {title:'Guanfacine ER',brand:'Intuniv'},
+  'clonidine-er': {title:'Clonidine ER',brand:'Kapvay'},
+  'metformin-solution': {title:'Metformin oral solution',brand:'Riomet'},
+};
+
+/** A recognizable brand reference, without changing a generic record's identity. */
+export function medicationBrand(id:string):string|undefined {
+  return pairs.find(pair=>pair.genericId===id||pair.brandId===id)?.brand??referenceNames[id]?.brand;
+}
 
 /** Record labels preserve the actual saved product identity, including generic entries. */
 export function medicationDisplay(product: Pick<Product, 'id' | 'name'>): { groupId: string; title: string; variant?: string; label: string } {
@@ -20,6 +32,8 @@ export function medicationDisplay(product: Pick<Product, 'id' | 'name'>): { grou
     const variant = product.id === pair.brandId ? pair.brand : 'Generic';
     return { groupId: `${pair.genericId}-display`, title: pair.title, variant, label: `${pair.title} · ${variant}` };
   }
+  const named=referenceNames[product.id];
+  if(named)return {groupId:product.id,title:named.title,label:`${named.title} · ${named.brand}`};
   return { groupId: product.id, title: product.name, label: product.name };
 }
 
@@ -31,7 +45,7 @@ export function groupMedicationProducts(products: readonly Product[]): Medicatio
   for (const product of products) {
     const display = medicationDisplay(product);
     const pair = pairs.find(pair => pair.genericId === product.id || pair.brandId === product.id);
-    const group = groups.get(display.groupId) ?? { id: display.groupId, title: display.title, family: product.family, brand: pair?.brand, products: [], defaultProduct: product };
+    const group = groups.get(display.groupId) ?? { id: display.groupId, title: display.title, family: product.family, brand: medicationBrand(product.id), products: [], defaultProduct: product };
     group.products.push(product);
     if (pair?.genericId === product.id) group.defaultProduct = product;
     groups.set(display.groupId, group);

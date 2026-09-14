@@ -79,7 +79,7 @@ test('a display total includes a labeled reference while direct evidence stays i
 });
 
 test('wholly unmodeled medication has dose timing but no invented concentration or reference path',()=>{
-  for(const item of [dose('metformin-ir','500'),dose('amphetamine-salts-ir','10')]){
+  for(const item of [dose('metformin-ir','500'),dose('adzenys-xr-odt','9.4')]){
     const html=render([item],1);
     assert.match(html,/aria-label="Dose times"/);assert.match(html,/\* No drug data/);
     assert.doesNotMatch(html,/reference-overlay-path|total-reference-path|total-estimated-path|ng\/mL|class="reading-control"/);

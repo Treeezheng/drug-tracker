@@ -1,4 +1,4 @@
-import { groupMedicationProducts, medicationDisplay } from '../lib/medication-display';
+import { groupMedicationProducts, medicationBrand, medicationDisplay } from '../lib/medication-display';
 import { Copy, Trash2, ChevronDown } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { products, getProduct } from '../lib/catalog';
@@ -130,7 +130,8 @@ export function updateDose(dose:Dose,patch:Partial<Dose>,zone:string):Dose{
         return {...i,...(strengthMg?{strengthMg}:{}),amountMg:strengthMg?multiply(strengthMg,d.quantity):scaleAmount(i.amountMg,d.quantity,dose.quantity)};
       });
     }
-    if(normalized!==null&&normalized%DECIMAL_SCALE!==0n&&d.unit&&d.unit!=='mL')d.unusual=true;
+    // Fractional quantity is already recorded exactly. It is not itself a claim
+    // of altered release; each concentration model validates the formulation.
   }
   if('date' in patch||'time' in patch||'disambiguation' in patch){
     d.administeredAt='';d.timeZone=zone;
@@ -332,7 +333,7 @@ export default function DoseEditor({dose,index,profile,onChange,onMoreMedication
       const next=selectDoseMedication({...dose,date,time,disambiguation},e.target.value,favorites,profile.timeZone);
       selectionPosition.current={doseId:dose.id,productId:next.productId,restore:captureScrollPosition(e.currentTarget)};
       onChange(next);
-    }}><option value="">Choose medication</option>{options.map(({product,label})=><option key={product.id} value={product.id}>{label}</option>)}{historical&&<option value={dose.productId}>{dose.productName||'Historical medication'} · {dose.formulation||'Formulation not recorded'}</option>}{onMoreMedications&&<option value="__other__">Other…</option>}</select></label>
+    }}><option value="">Choose medication</option>{options.map(({product,label})=><option key={product.id} value={product.id}>{label}</option>)}{historical&&<option value={dose.productId}>{dose.productName||'Historical medication'} · {dose.formulation||'Formulation not recorded'}</option>}{onMoreMedications&&<option value="__other__">Other…</option>}</select>{medicationBrand(dose.productId)&&<small className="dose-medication-brand" title="Brand reference">{medicationBrand(dose.productId)}</small>}</label>
     <div className="field strength-field"><label htmlFor={`dose-strength-${dose.id}`} id={strengthDescriptionId}>{dose.productId?`Strength · ${strengthUnit}`:'Strength'}</label><select aria-label={`Dose ${index+1} strength`} disabled={!p} id={`dose-strength-${dose.id}`} aria-invalid={amountError||undefined} aria-describedby={`${strengthDescriptionId}${amountError?` ${inputErrorId}`:''}`} value={listedStrength??packageStrength} onChange={e=>{const choice=strengthChoices.find(item=>item.packageStrength===e.target.value);if(choice){editPosition.current={doseId:dose.id,restore:captureScrollPosition(e.currentTarget)};onChange(selectDoseStrength({...dose,date,time,disambiguation},choice,profile.timeZone));}}}>{!packageStrength&&<option value="">—</option>}{p&&strengthOptions.map(s=><option key={s} value={s}>{s}</option>)}{!p&&packageStrength&&<option value={packageStrength}>{packageStrength}</option>}</select></div>
     <div className="field quantity-field"><label htmlFor={`dose-quantity-${dose.id}`} id={quantityDescriptionId}>{dose.productId&&dose.unit?({tablet:'Tablets',capsule:'Capsules',patch:'Patches',mL:'Volume · mL'} as Record<string,string>)[dose.unit]??`Quantity · ${dose.unit}`:'Quantity'}</label><div className="dose-quantity-stepper"><button type="button" disabled={lowerQuantity===null} aria-label={`Decrease Dose ${index+1} quantity by ${quantityIncrement} ${dose.unit||'unit'}`} onClick={event=>{if(lowerQuantity!==null)updateInPlace({quantity:lowerQuantity},event.currentTarget);}}>−</button><input id={`dose-quantity-${dose.id}`} aria-label={`Dose ${index+1} quantity`} aria-invalid={amountError||undefined} aria-describedby={`${quantityDescriptionId}${amountError?` ${inputErrorId}`:''}`} type="number" inputMode="decimal" min="0.000000001" max="10000" step="any" value={dose.quantity} onChange={e=>updateInPlace({quantity:e.target.value},e.currentTarget)} onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();const next=event.key==='ArrowUp'?higherQuantity:lowerQuantity;if(next!==null)updateInPlace({quantity:next},event.currentTarget);}}}/><button type="button" disabled={higherQuantity===null} aria-label={`Increase Dose ${index+1} quantity by ${quantityIncrement} ${dose.unit||'unit'}`} onClick={event=>{if(higherQuantity!==null)updateInPlace({quantity:higherQuantity},event.currentTarget);}}>+</button></div></div>
     <label className="field date-field"><span>Date</span><input aria-label={`Dose ${index+1} date`} aria-invalid={!!timeError||undefined} aria-describedby={timeError?timeErrorId:undefined} type="date" value={date} onInput={e=>updateInPlace({date:e.currentTarget.value},e.currentTarget)}/></label>
