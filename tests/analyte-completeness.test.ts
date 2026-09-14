@@ -27,7 +27,7 @@ test('same-day unknown 5 mg shares analyte identity with reference 10 mg without
   assert.equal(total.complete,false);assert.equal(total.value,4.3);assert.equal(timelineReading(total,at),'4.30*');
   assert.deepEqual(total.items.map(item=>item.dose.id),[known.id,unknown.id]);
   const html=render([known,unknown]);
-  assert.match(html,/<sup>\*<\/sup><\/button><strong>6\.45<\/strong>/);assert.match(html,/\* No drug data/);assert.doesNotMatch(html,/>Modeled total</);
+  assert.match(html,/<strong>6\.45<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);assert.match(html,/\* No drug data/);assert.doesNotMatch(html,/>Modeled total</);
   assert.equal((html.match(/class="analyte-panel"/g)||[]).length,1);
 });
 
@@ -40,7 +40,7 @@ test('unknown previous-day and remote same-analyte records remain in the display
     assert.equal(timelineReading(groupedTotals(scoped.doses,at,true).Methylphenidate,at),'4.30*');
     assert.equal(hasMissingTimelineData(scoped.doses,start,end,true,'Methylphenidate'),true);
     const html=render([unknown,known]);assert.match(html,/Earlier recorded doses have unknown direct contributions/);
-    assert.ok(html.includes(`<strong>${estimateTotals([unknown,known],at,true).Methylphenidate.value.toFixed(2)}</strong>`));assert.match(html,/<sup>\*<\/sup><\/button><strong>/);assert.equal(JSON.stringify([known,unknown]),before);
+    assert.ok(html.includes(`<strong>${estimateTotals([unknown,known],at,true).Methylphenidate.value.toFixed(2)}</strong>`));assert.match(html,/<small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);assert.equal(JSON.stringify([known,unknown]),before);
   }
 });
 
@@ -75,7 +75,7 @@ test('saved relative illustrations cannot masquerade as physical concentrations 
   assert.equal(timelineReading(totals.Methylphenidate,at),'4.30*');
   assert.equal(totals[relative.group].value,relative.value);
   const html=render([unknown,known]),panels=html.split('class="analyte-panel"');
-  assert.equal(panels.length,3);assert.match(html,/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);
+  assert.equal(panels.length,3);assert.match(html,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
   const physicalPanel=panels.find(panel=>panel.includes('aria-label="Methylphenidate, ng/mL.'));
   assert.ok(physicalPanel,'The physical methylphenidate plot must remain separately identifiable.');
   assert.match(physicalPanel,/ng\/mL · estimate/);

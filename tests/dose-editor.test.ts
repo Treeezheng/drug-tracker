@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import DoseEditor, { currentDoseTime, doseInputError, newDose, quantityStep, steppedQuantity, shiftDoseTime, updateDose, updatePatchRemoval } from '../src/components/DoseEditor.tsx';
+import DoseEditor, { currentDoseTime, doseTimeForDate, doseInputError, newDose, quantityStep, steppedQuantity, shiftDoseTime, updateDose, updatePatchRemoval } from '../src/components/DoseEditor.tsx';
 import { blankAssumptions, concentration } from '../src/lib/model.ts';
 import { instantToLocal } from '../src/lib/time.ts';
 import type { Dose, Profile } from '../src/lib/types.ts';
@@ -52,13 +52,21 @@ test('a half 10 mg tablet remains half a tablet with exact labeled 5 mg',()=>{
   assert.doesNotMatch(render(dose),/Record details|Altered administration/);
 });
 
-test('half-tablet buttons use reviewed brand and strength rules rather than assuming all tablets split',()=>{
-  for(const [id,strength] of [['ritalin','10'],['ritalin','20'],['adderall-ir','5'],['adderall-ir','7.5'],['adderall-ir','30'],['quillichew-er','20'],['quillichew-er','30'],['dyanavel-xr-tablet','5']])assert.equal(quantityStep(newDose(id,strength)),'0.5',`${id} ${strength}`);
-  for(const [id,strength] of [['ritalin','5'],['methylphenidate-ir','10'],['amphetamine-salts-ir','5'],['quillichew-er','40'],['dyanavel-xr-tablet','10'],['concerta','18'],['relexxii','18'],['intuniv','1'],['clonidine-er','0.1'],['metformin-er','500'],['metformin-ir','1000'],['vyvanse-chewable','10'],['ritalin-la','10'],['xelstrym','4.5']])assert.equal(quantityStep(newDose(id,strength)),'1',`${id} ${strength}`);
-  assert.equal(quantityStep({...newDose('ritalin','10'),formulation:'Historical different release'}),'1');
-  assert.equal(quantityStep({...newDose('ritalin','10'),productId:'unknown-historical'}),'1');
-  assert.equal(quantityStep({...newDose('ritalin','10'),packageStrength:'10.000'}),'0.5');
-  assert.equal(quantityStep({...newDose('ritalin','10'),packageStrength:'20'}),'1');
+test('tablet recording buttons consistently step by halves without granting a splitting or concentration model',()=>{
+  for(const [id,strength] of [['ritalin','5'],['ritalin','10'],['methylphenidate-ir','10'],['amphetamine-salts-ir','5'],['quillichew-er','40'],['dyanavel-xr-tablet','10'],['concerta','18'],['relexxii','18'],['intuniv','1'],['clonidine-er','0.1'],['metformin-er','500'],['metformin-ir','1000'],['vyvanse-chewable','10']]){
+    const original=newDose(id,strength);
+    assert.equal(quantityStep(original),'0.5',`${id} ${strength}`);
+    const half=updateDose(original,{quantity:steppedQuantity(original,-1)!},zone);
+    assert.equal(half.quantity,'0.5');assert.equal(half.unusual,true);
+    assert.equal(concentration(half,Date.now()).value,null);
+    assert.match(render(half),/>Tablets<\/label>/);
+  }
+  assert.equal(quantityStep(newDose('ritalin-la','10')),'1');
+  assert.equal(quantityStep(newDose('xelstrym','4.5')),'1');
+  assert.equal(quantityStep({...newDose('ritalin','10'),productId:'unknown-historical'}),'0.5');
+  assert.match(render(newDose('ritalin-la','10')),/>Capsules<\/label>/);
+  assert.match(render(newDose('xelstrym','4.5')),/>Patches<\/label>/);
+  assert.match(render(newDose('onyda-xr','0.1')),/>Volume · mL<\/label>/);
 });
 
 test('one button increment makes a precise 1.5 tablet snapshot and stock deducts 1.5 rather than rounding',()=>{
@@ -201,7 +209,7 @@ test('time errors and dose units are available through accessible descriptions',
   assert.match(html,new RegExp(`id="${errorId}" role="alert"`));
   assert.match(html,new RegExp(`aria-label="Dose 1 time: 01:30" aria-invalid="true" aria-describedby="${errorId}"`));
   const liquid=newDose('metformin-solution','100'),liquidHtml=render(liquid);
-  assert.match(liquidHtml,new RegExp(`id="dose-quantity-unit-${liquid.id}">Quantity · mL`));
+  assert.match(liquidHtml,new RegExp(`id="dose-quantity-unit-${liquid.id}">Volume · mL`));
   assert.match(liquidHtml,new RegExp(`aria-describedby="dose-quantity-unit-${liquid.id}"`));
   assert.match(liquidHtml,new RegExp(`id="dose-strength-unit-${liquid.id}">Strength · mg/mL`));
 });
@@ -295,4 +303,15 @@ test('unchanged removal text preserves recorded seconds and explicit clearing is
   assert.equal(untouched.dose,patch);assert.equal(untouched.dose.removalAt,'2026-09-13T23:03:42Z');
   const cleared=updatePatchRemoval(patch,'',zone);assert.equal(cleared.error,'');assert.equal(cleared.dose.removalAt,'');assert.equal(cleared.dose.administeredAt,patch.administeredAt);
   assert.equal(patch.removalAt,'2026-09-13T23:03:42Z');
+});
+
+test('new-dose defaults preserve the selected chart day and local increment without fabricating DST instants',()=>{
+  const now=Date.parse('2026-09-14T17:37:00Z');
+  assert.deepEqual(doseTimeForDate('2026-09-14','America/Los_Angeles',5,now),currentDoseTime('America/Los_Angeles',5,now));
+  const previous=doseTimeForDate('2026-09-10','America/Los_Angeles',5,now);
+  assert.equal(previous.date,'2026-09-10');assert.equal(previous.time,'10:35');assert.equal(previous.administeredAt,'2026-09-10T17:35:00Z');
+  const gap=doseTimeForDate('2026-03-08','America/Los_Angeles',5,Date.parse('2026-03-09T09:35:00Z'));
+  assert.equal(gap.date,'2026-03-08');assert.equal(gap.time,'02:35');assert.equal(gap.administeredAt,'');
+  const repeat=doseTimeForDate('2026-11-01','America/Los_Angeles',5,Date.parse('2026-11-02T09:35:00Z'));
+  assert.equal(repeat.date,'2026-11-01');assert.equal(repeat.time,'01:35');assert.equal(repeat.administeredAt,'');
 });

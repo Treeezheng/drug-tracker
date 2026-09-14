@@ -24,7 +24,7 @@ All paths begin `/drug/api`. Mutations require exact Origin; a supplied GET Orig
 | --- | --- |
 | `GET /edition` | `{ edition: 'cloud' }`. |
 | `GET /session` | `{ user: null }` or `{ user: { id, name, username, authMode: 'opaque-v1' } }`; no token or secret. A cookie alone does not unlock browser records. |
-| `GET /security` with owner header | Current session creation/expiry, active-session count and `sessionLifetimeHours: 24`; no IP, fingerprint or health activity. |
+| `GET /security` with owner header | Current session creation/expiry, active-session count and `sessionLifetimeHours: 168`; no IP, fingerprint or health activity. |
 | `/auth/opaque/*` | Exact two-phase registration/login, purpose-bound reauthentication, password replacement and recovery messages in the [protocol](./opaque-protocol-v1.md). |
 | `POST /auth/logout` with `{}` | `{ ok: true }`, clears the cookie and revokes only that session. A supplied owner header must match. |
 | `POST /auth/logout-all` with `{ reauthGrant }` and owner header | `{ ok: true }`, clears the cookie, revokes all owner sessions and increments its authentication version. Needs fresh proof for `logout-all`. |
@@ -40,7 +40,7 @@ Recovery uses `DTR1.<owner>.<independent-auth-secret>.<DEK>`. Only the auth half
 
 ## Sessions, abuse controls and metadata
 
-The production cookie is `__Secure-drug_cloud_session`: Secure, HttpOnly, SameSite=Strict, Path=/drug/, with 24-hour absolute expiry. Only a SHA-256 digest of its independent random 32-byte token is stored. Startup caps old sessions from original creation time without extending them on restart. Development loopback HTTP uses a separate non-Secure cookie. Ambiguous/duplicate cookies fail closed.
+The production cookie is `__Secure-drug_cloud_session`: Secure, HttpOnly, SameSite=Strict, Path=/drug/, with 7-day absolute expiry. Only a SHA-256 digest of its independent random 32-byte token is stored. Startup caps old sessions from original creation time without extending them on restart; existing shorter expiries remain unchanged. Development loopback HTTP uses a separate non-Secure cookie. Ambiguous/duplicate cookies fail closed.
 
 OPAQUE challenges/grants last 120 seconds and are one-use. Stored handle digests bind source, purpose, username, owner, auth version and applicable session/revision. Pending caps are 1,000 global, 40 per source and 12 per username. Login/recovery starts also share a default 120-per-15-minute source budget and 30-per-15-minute account budget; consuming a challenge never resets quotas. Unknown names share a source bucket. Registration allows 10 starts per source per hour. Malformed basic fields do not spend a valid account's quota. SQLite cumulative quotas use bounded process memory; PostgreSQL counters and both repositories' challenges are database-shared. Expiry cleanup runs during subsequent relevant operations, not a dedicated timer.
 

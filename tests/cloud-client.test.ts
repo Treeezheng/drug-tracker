@@ -39,7 +39,7 @@ function server() {
     if (path === '/auth/verify-password') return reply(body.password === accountPassword ? {ok:true} : {error:'Incorrect account password.'}, body.password === accountPassword ? 200 : 403);
     if (path === '/auth/change-password') { if(body.currentPassword !== accountPassword)return reply({error:'Incorrect account password.'},403);accountPassword=body.newPassword;return reply({user:{id:'owner1',name:'Account name'},security:{activeSessionCount:1}}); }
     if (path === '/auth/logout-all') { if(body.password!==accountPassword)return reply({error:'Incorrect account password.'},403);auth=false;return reply({ok:true}); }
-    if (path === '/security') return reply({security:{activeSessionCount:1,sessionLifetimeHours:24,currentSession:{createdAt:'2026-09-13T00:00:00Z',expiresAt:'2026-09-14T00:00:00Z'}}});
+    if (path === '/security') return reply({security:{activeSessionCount:1,sessionLifetimeHours:168,currentSession:{createdAt:'2026-09-13T00:00:00Z',expiresAt:'2026-09-14T00:00:00Z'}}});
     if (path === '/account' && method === 'DELETE') {
       if (body.password !== 'correct-account-password') return reply({ error: 'Incorrect account password.' }, 403);
       auth = false; vault = null; return reply({ ok: true });
@@ -166,7 +166,7 @@ test('account password change refuses the current encryption password locally, r
   await client.request('/auth/change-password','POST',{currentPassword:accountPassword,newPassword:replacementPassphrase});
   assert.deepEqual((await client.request<{data:AppData}>('/export')).data,complete());
   assert.equal(client.getState().user?.id,'owner1');
-  assert.equal((await client.request<{security:{sessionLifetimeHours:number}}>('/security')).security.sessionLifetimeHours,24);
+  assert.equal((await client.request<{security:{sessionLifetimeHours:number}}>('/security')).security.sessionLifetimeHours,168);
   const signingOut=client.request('/auth/logout-all','POST',{password:replacementPassphrase});
   assert.equal(client.getState().locked,true);
   await signingOut;assert.equal(client.getState().user,null);

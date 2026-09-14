@@ -39,17 +39,31 @@ test('a frozen Add attempt retains the same ID, payload and Planned status acros
   original.note='Later form edit';assert.equal(attempt.note,'Synthetic planned dose');
 });
 
-test('saved plans never become actual on reload or ordinary edit; explicit confirmation preserves ID and revision',()=>{
+test('saved plans stay planned on reload; explicit edits infer the selected time and confirmation preserves ID and revision',()=>{
   const planned={...prepareDoseEntry(entry(),at),revision:3};const original=structuredClone(planned);
-  const edited=prepareDoseCorrection({...planned,note:'Changed note'},'planned',at+86400000);
-  assert.equal(edited.status,'planned');assert.equal(edited.revision,3);
+  const edited=prepareDoseCorrection({...planned,note:'Changed note'},at+86400000);
+  assert.equal(edited.status,'actual');assert.equal(edited.revision,3);
   assert.equal(partitionDoseEntries([planned],[]).actual.length,0);
   assert.throws(()=>confirmPlannedDose(planned,at),/future/);
   const actual=confirmPlannedDose(planned,at+120000);
   assert.equal(actual.status,'actual');assert.equal(actual.id,planned.id);assert.equal(actual.revision,3);
   assert.throws(()=>confirmPlannedDose(actual,at+120000),/no longer planned/);
-  assert.throws(()=>prepareDoseCorrection({...actual,administeredAt:'2026-09-14T12:00:00Z'},'actual',at),/future/);
+  assert.equal(prepareDoseCorrection({...actual,administeredAt:'2026-09-14T12:00:00Z'},at).status,'planned');
   assert.deepEqual(planned,original);
+});
+
+test('moving a Taken record into the future explicitly saves the same record as Planned without mutating its original snapshot',()=>{
+  const actual={...entry(),status:'actual' as const,revision:4,administeredAt:'2026-09-13T11:59:00Z',time:'11:59'},original=structuredClone(actual);
+  const future={...actual,administeredAt:'2026-09-13T12:00:00.001Z',time:'12:00'},corrected=prepareDoseCorrection(future,at);
+  assert.equal(corrected.status,'planned');assert.equal(corrected.id,actual.id);assert.equal(corrected.revision,4);
+  assert.equal(corrected.administeredAt,future.administeredAt);assert.equal(corrected.quantity,actual.quantity);assert.deepEqual(actual,original);
+  assert.equal(prepareDoseCorrection({...actual,administeredAt:'2026-09-13T12:00:00Z'},at).status,'actual');
+  assert.equal(prepareDoseCorrection({...actual,administeredAt:'2026-09-13T05:00:00.001-07:00'},at).status,'planned');
+  assert.equal(prepareDoseCorrection(actual,at).status,'actual');
+  assert.equal(prepareDoseCorrection(corrected,at+86400000).status,'actual','An explicit save infers the edited time even for a saved plan.');
+  assert.equal(corrected.status,'planned','An existing snapshot does not change as the clock advances.');
+  assert.throws(()=>confirmPlannedDose(corrected,at),/future/);
+  assert.throws(()=>prepareDoseCorrection({...actual,administeredAt:'invalid'},at),/complete date and time/);
 });
 
 test('saved planned doses appear in simulation but remain outside history, supply use and symptom medication grouping until confirmed',()=>{
@@ -90,7 +104,7 @@ test('saved plans outside the selected chart window cannot introduce unrelated g
   assert.deepEqual(futureView,[future]);assert.equal(futureView[0].status,'planned');
 });
 
-test('an encrypted planned save with lost acknowledgement retries exactly, survives a new client and backup, then confirms once',async t=>{
+test('an encrypted planned save retries exactly, survives reload and backup, then changes status only on explicit confirmation or correction',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'drug-planned-cloud-')),store=openVaultStore({dbPath:join(dir,'synthetic.sqlite')}),owner='synthetic-plan-owner';
   t.after(async()=>{store.close();await rm(dir,{recursive:true,force:true});});
   let drop=false,writes=0;
@@ -120,4 +134,17 @@ test('an encrypted planned save with lost acknowledgement retries exactly, survi
   const actual=await second.request<Dose>(`/doses/${saved.id}`,'PUT',confirmation,owner);
   assert.equal(actual.revision,2);assert.equal(actual.status,'actual');assert.equal(actual.id,saved.id);
   assert.equal((await second.request<AppData>('/data','GET',undefined,owner)).doses.length,1);
+  const corrected=prepareDoseCorrection({...actual,administeredAt:'2026-09-14T12:01:00Z',date:'2026-09-14',time:'12:01'},at+120000);
+  const rescheduled=await second.request<Dose>(`/doses/${actual.id}`,'PUT',corrected,owner);
+  assert.equal(rescheduled.id,actual.id);assert.equal(rescheduled.revision,3);assert.equal(rescheduled.status,'planned');
+  const afterCorrection=await second.request<AppData>('/data','GET',undefined,owner);
+  assert.equal(afterCorrection.doses.length,1);assert.deepEqual(partitionDoseEntries(afterCorrection.doses,[]).actual,[]);
+  assert.deepEqual(parseBackup(JSON.stringify(await second.request('/export','GET',undefined,owner))).doses,[rescheduled]);
+  const receipt:InventoryReceipt={id:'synthetic-reschedule-stock',productId:actual.productId,productName:actual.productName,packageStrength:'10',strengthUnit:'mg',unit:'tablet',quantity:'20',receivedAt:'2026-09-01T00:00:00Z',timeZone:'UTC',note:''};
+  assert.equal(stockBalances([receipt],afterCorrection.doses,at+86400000)[0].used,'0');
+  const backToPast=prepareDoseCorrection({...rescheduled,administeredAt:actual.administeredAt,date:actual.date,time:actual.time},at+120000);
+  const takenAgain=await second.request<Dose>(`/doses/${actual.id}`,'PUT',backToPast,owner);
+  assert.equal(takenAgain.id,actual.id);assert.equal(takenAgain.revision,4);assert.equal(takenAgain.status,'actual');
+  const afterPastEdit=await second.request<AppData>('/data','GET',undefined,owner);
+  assert.equal(afterPastEdit.doses.length,1);assert.equal(stockBalances([receipt],afterPastEdit.doses,at+86400000)[0].used,'1.5');
 });

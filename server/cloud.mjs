@@ -128,7 +128,7 @@ function staticBuild(distDir) {
   const editionTags = tokens.filter(tag => !tag.startsWith('<!--') && /\bname\s*=\s*["']drug-edition["']/i.test(tag));
   if (editionTags.length !== 1 || !/^<meta\s+name=["']drug-edition["']\s+content=["']cloud["']\s*\/?>$/i.test(editionTags[0])) throw new CloudError(400, 'The cloud server requires a cloud build of the frontend.');
   const legalPages = new Map();
-  for (const name of ['privacy.html', 'terms.html', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'robots.txt', 'llms.txt', 'favicon.svg', 'favicon.ico', 'build-info.json']) {
+  for (const name of ['privacy.html', 'terms.html', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'robots.txt', 'llms.txt', 'favicon.svg', 'favicon.ico', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png', 'site.webmanifest', 'build-info.json']) {
     try { capture(name); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (name === 'privacy.html' || name === 'terms.html') legalPages.set(name, files.get(name));
   }
@@ -149,7 +149,7 @@ function staticBuild(distDir) {
   // startup runs. After this bounded snapshot, requests never consult filesystem paths.
   return { index: files.get('index.html'), files, legalPages };
 }
-const MIME = { '.txt': 'text/plain; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json' };
+const MIME = { '.txt': 'text/plain; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
 /** API-only by default; the CLI always supplies and validates a cloud frontend build. */
 export async function createCloudServer(options = {}) {

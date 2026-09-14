@@ -37,7 +37,7 @@ test('four-salt medicine keeps scalar package strength and exact labeled ingredi
   assert.throws(()=>parseCustomStrength(p,'1/2/3/4'),/one package strength/);
   const dose=updateDose(newDose('adderall-ir','7.25'),{quantity:'0.5'},zone);
   assert.equal(dose.amountMg,'3.625');assert.deepEqual(dose.ingredients?.map(i=>i.amountMg),['0.90625','0.90625','0.90625','0.90625']);
-  assert.equal(quantityStep(dose),'1');assert.equal(doseInputError(dose),'');
+  assert.equal(quantityStep(dose),'0.5');assert.equal(doseInputError(dose),'');
 });
 
 test('custom liquid concentration is mg per mL and exact quantity multiplication does not round',()=>{
@@ -64,16 +64,17 @@ test('custom editing preserves identity and quantity but makes incomplete or inv
 test('noncatalog packages never gain a reference model just by matching the total reference amount',()=>{
   for(const [productId,strength,quantity] of [['ritalin','2.5','4'],['concerta','9','2']]){
     const dose=updateDose(newDose(productId,strength),{quantity},zone);
-    assert.equal(modelGroup({...dose,unusual:false}).reference,false);assert.equal(quantityStep(dose),'1');
+    assert.equal(modelGroup({...dose,unusual:false}).reference,false);assert.equal(quantityStep(dose),'0.5');
   }
   assert.equal(modelGroup(newDose('ritalin','10')).reference,true);
 });
 
-test('dose strength routes More to medication management and keeps saved custom packages as selected options',()=>{
+test('medication routes Other to medication management and keeps saved custom packages as selected options',()=>{
   const render=(productId:string,strength:string)=>renderToStaticMarkup(createElement(DoseEditor,{dose:newDose(productId,strength),index:0,profile,onMoreMedications:()=>{},onChange:()=>{throw Error('Rendering must not change a record.');}}));
   for(const [productId,strength] of [['ritalin','10'],['ritalin','7.5'],['onyda-xr','0.125'],['azstarys','7.5/1.2']]){
     const html=render(productId,strength);
-    assert.match(html,/<option value="__more__">More…<\/option>/);
+    assert.match(html,/<option value="__other__">Other…<\/option>/);
+    assert.doesNotMatch(html,/value="__more__"/);
     assert.ok(html.includes(`<option value="${strength}" selected="">${strength}</option>`));
     assert.doesNotMatch(html,/aria-label="Dose 1 custom strength|dose-custom-strength|>Custom<|value="__more__" selected/);
   }

@@ -10,6 +10,8 @@ import { opaqueClient } from './opaque-client';
 import { opaqueConfig, opaqueLogin, opaqueField, secureUsername, finishOpaqueRegistration } from './cloud-opaque-flow';
 import type { OpaqueAction } from './cloud-opaque-flow';
 import type { VaultDataEnvelope, VaultKeyEnvelope } from './vault-crypto';
+import { createDeviceUnlock, DEVICE_UNLOCK_LIFETIME_MS } from './device-unlock';
+import type { AutoUnlockPreference, DeviceUnlockStore } from './device-unlock';
 
 export interface CloudUser { id: string; name: string; username?: string; authMode?: 'opaque-v1' | 'legacy-scrypt'; }
 export interface CloudVaultSnapshot { ownerId: string; revision: number; dataEnvelope: VaultDataEnvelope; keyEnvelope: VaultKeyEnvelope; createdAt: string; updatedAt: string; }
@@ -25,7 +27,10 @@ export interface CloudClient extends CloudTransport {
   loadVault(): Promise<{ exists: boolean; revision: number }>;
   setupVault(vaultPassphrase: string, initialData?: AppData): Promise<{ data: AppData; recoveryKey: string }>;
   unlockVault(secret: { vaultPassphrase: string } | { recoveryKey: string }): Promise<AppData>;
-  lock(): void;
+  getAutoUnlockPreference(): Promise<AutoUnlockPreference>;
+  setAutoUnlockPreference(enabled: boolean): Promise<void>;
+  tryAutoUnlock(): Promise<boolean>;
+  lock(options?: { preserveAutoUnlock?: boolean }): void;
   logout(): Promise<void>;
   deleteAccount(password: string): Promise<void>;
   changeVaultPassword(currentSecret: VaultSecret, newPassphrase: string, accountPassword: string): Promise<{ recoveryKeyChanged: false }>;
@@ -94,10 +99,17 @@ async function responseJson(response: Response): Promise<Record<string, unknown>
   finally { reader.releaseLock(); }
 }
 
-/** Online-only. Keys and decrypted records live in this closure, never browser storage. */
-export function createCloudClient(options: { apiBase?: string; fetch?: typeof fetch } = {}): CloudClient {
+/** Online-only records. Opted-in device storage holds only a locally wrapped vault key. */
+export function createCloudClient(options: { apiBase?: string; fetch?: typeof fetch; deviceUnlockStore?: DeviceUnlockStore; now?: () => number } = {}): CloudClient {
   const apiBase = (options.apiBase ?? '/drug/api').replace(/\/$/, '');
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const now = options.now ?? Date.now;
+  const deviceUnlock = createDeviceUnlock({ scope: apiBase, store: options.deviceUnlockStore, now });
+  // Only explicit password authentication sets this timestamp; automatic resume
+  // never extends it, even when the setting is repeatedly enabled in this process.
+  let passwordAuthenticatedAt: number | null = null;
+  let verifiedEnrollmentEpoch: string | null = null;
+  let autoUnlockGeneration = 0;
   let user: CloudUser | null = null, snapshot: CloudVaultSnapshot | null = null, loaded = false;
   let key: CryptoKey | null = null, data: AppData | null = null, generation = 0;
   let cryptoAbort = new AbortController();
@@ -137,6 +149,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     return run;
   }
   async function wire(path: string, method = 'GET', body?: unknown, ownerId?: string): Promise<Record<string, unknown>> {
+    const requestGeneration = generation;
     let response: Response;
     try {
       response = await fetcher(`${apiBase}${path}`, { method, credentials: 'same-origin', cache: 'no-store',
@@ -144,23 +157,115 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
         ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     } catch { throw new ApiError('Connection interrupted. Keep this page open and retry the same save. No unencrypted data was queued.', 0); }
     const result = await responseJson(response);
-    if (!response.ok) throw new ApiError(typeof result.error === 'string' ? result.error : 'The cloud request failed.', response.status, result.currentRevision);
+    if (!response.ok) {
+      if (response.status === 401 && generation === requestGeneration && (!ownerId || user?.id === ownerId)) lock();
+      throw new ApiError(typeof result.error === 'string' ? result.error : 'The cloud request failed.', response.status, result.currentRevision);
+    }
     return result;
   }
   async function readRemote(ownerId: string, token: number): Promise<CloudVaultSnapshot | null> {
     const result = await wire('/vault', 'GET', undefined, ownerId); check(token, ownerId);
     const remote = readSnapshot(result.vault, ownerId);
+    if (snapshot?.ownerId === ownerId && (!remote || !sameWrappedKey(remote.keyEnvelope, snapshot.keyEnvelope))) revokeAutoUnlock();
     if (remote && snapshot?.ownerId === ownerId && remote.revision < snapshot.revision) throw new ApiError('The server returned an older record snapshot. Your open records are unchanged. Try again after checking the server.', 409, remote.revision);
     return remote;
   }
-  function lock(): void { generation++; cryptoAbort.abort(); cryptoAbort = new AbortController(); key = null; data = null; pending = null; pendingSetup = null; pendingVaultChange = null; pendingSecure = null; }
+  function revokeAutoUnlock(): void { autoUnlockGeneration++; passwordAuthenticatedAt = null; verifiedEnrollmentEpoch = null; void deviceUnlock.revoke().catch(() => undefined); }
+  // Authentication still succeeds in memory when browser key storage is denied.
+  // Its enrollment permission, however, must remain tied to the epoch observed
+  // before authentication began, including across our own security revocations.
+  function enrollmentEpoch(): string | null { try { return deviceUnlock.epoch(); } catch { return null; } }
+  function revokeForAuthentication(expectedEpoch: string | null): string | null {
+    const unchanged = expectedEpoch !== null && enrollmentEpoch() === expectedEpoch;
+    revokeAutoUnlock();
+    return unchanged ? enrollmentEpoch() : null;
+  }
+  function lock(options: { preserveAutoUnlock?: boolean } = {}): void {
+    if (!options.preserveAutoUnlock) revokeAutoUnlock();
+    passwordAuthenticatedAt = null;
+    verifiedEnrollmentEpoch = null;
+    generation++; cryptoAbort.abort(); cryptoAbort = new AbortController(); key = null; data = null; pending = null; pendingSetup = null; pendingVaultChange = null; pendingSecure = null;
+  }
   async function session(): Promise<CloudUser | null> {
     const token = generation;
     await authQueue; check(token);
     const result = await wire('/session'); check(token);
     const next = readUser(result.user);
-    if (next?.id !== user?.id) { lock(); loaded = false; snapshot = null; }
+    if (next?.id !== user?.id) { lock({ preserveAutoUnlock: !user && !!next }); loaded = false; snapshot = null; }
+    if (!next) revokeAutoUnlock();
     user = next; return structuredClone(user);
+  }
+  function getAutoUnlockPreference(): Promise<AutoUnlockPreference> { return deviceUnlock.preference(user?.id); }
+  async function setAutoUnlockPreference(enabled: boolean): Promise<void> {
+    const preferenceToken = ++autoUnlockGeneration;
+    if (!enabled) {
+      try { await deviceUnlock.revoke(); }
+      catch { throw new ApiError('Automatic unlock could not be removed from this browser. Clear this site’s stored data before leaving a shared device.', 0); }
+      return;
+    }
+    // Capture at invocation, before this enablement can wait behind a save or
+    // server read. A later disable in another tab must win that race as well.
+    let enrollmentEpoch: string;
+    try { enrollmentEpoch = deviceUnlock.epoch(); }
+    catch { throw new ApiError('Device auto-unlock storage is unavailable in this browser.', 0); }
+    return serial(async token => {
+      const checkPreference = () => {
+        check(token);
+        if (preferenceToken !== autoUnlockGeneration) throw new ApiError('The automatic unlock setting changed. Review it before trying again.', 409);
+      };
+      checkPreference();
+      const ownerId = requireUnlocked(), authenticatedAt = passwordAuthenticatedAt;
+      if (authenticatedAt === null || now() < authenticatedAt || now() >= authenticatedAt + DEVICE_UNLOCK_LIFETIME_MS
+        || verifiedEnrollmentEpoch !== enrollmentEpoch)
+        throw new ApiError('Confirm your password before enabling automatic unlock on this device.', 403);
+      const remote = await readRemote(ownerId, token);
+      if (!remote || !sameWrappedKey(remote.keyEnvelope, snapshot!.keyEnvelope)) throw new ApiError('Encryption settings changed. Sign in with your password again.', 409);
+      try { await deviceUnlock.enable(key!, ownerId, remote.keyEnvelope, authenticatedAt, () => { check(token, ownerId); checkPreference(); }, enrollmentEpoch); }
+      catch (error) { check(token, ownerId); throw new ApiError(error instanceof Error ? error.message : 'Device auto-unlock is unavailable in this browser.', 0); }
+    });
+  }
+  async function tryAutoUnlock(): Promise<boolean> {
+    // The live session is checked before even reading the stored key. A cached
+    // cookie, old account hint, or offline snapshot is never sufficient.
+    let token = generation;
+    try {
+      if (key || data) return false;
+      const current = await session();
+      if (!current) return false;
+      token = generation;
+      return await serial(async () => {
+        const ownerId = current.id;
+        check(token, ownerId);
+        if (key || data) return false;
+        const remote = await readRemote(ownerId, token);
+        if (!remote) { revokeAutoUnlock(); return false; }
+        if ((remote.keyEnvelope.version === 3) !== (current.authMode === 'opaque-v1')
+          || (current.authMode === 'opaque-v1' && !current.username)) {
+          revokeAutoUnlock(); return false;
+        }
+        const restored = await deviceUnlock.restore(ownerId, remote.keyEnvelope); check(token, ownerId);
+        if (!restored) return false;
+        const fresh = validateData(await decryptVault(remote.dataEnvelope, restored.key, ownerId)); check(token, ownerId);
+        // A logout/recovery on another device while local decryption was running
+        // must not publish the plaintext from the earlier authorized response.
+        const confirmed = readUser((await wire('/session')).user); check(token, ownerId);
+        if (confirmed?.id !== ownerId || confirmed.username !== current.username || confirmed.authMode !== current.authMode) {
+          lock(); user = confirmed; snapshot = null; loaded = false; return false;
+        }
+        const latest = await readRemote(ownerId, token);
+        if (!latest || latest.revision < remote.revision || !sameWrappedKey(latest.keyEnvelope, remote.keyEnvelope)) {
+          revokeAutoUnlock(); return false;
+        }
+        if (!await restored.current()) return false;
+        check(token, ownerId);
+        user = current; key = restored.key; data = fresh; snapshot = remote; loaded = true;
+        passwordAuthenticatedAt = null; verifiedEnrollmentEpoch = null;
+        return true;
+      });
+    } catch (error) {
+      if (generation === token && (!(error instanceof ApiError) || error.status !== 0)) revokeAutoUnlock();
+      return false;
+    }
   }
   async function login(username: string, password: string): Promise<CloudUser> {
     lock(); user = null; snapshot = null; loaded = false;
@@ -182,7 +287,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       return structuredClone(user);
     });
   }
-  async function acceptSecure(result: Record<string, unknown>, exportKey: string | null, token: number, expected?: SecureCandidate): Promise<void> {
+  async function acceptSecure(result: Record<string, unknown>, exportKey: string | null, token: number, authenticationEpoch: string | null, expected?: SecureCandidate): Promise<void> {
     const next = readUser(result.user);
     if (!next || next.authMode !== 'opaque-v1' || !next.username || (expected && (next.id !== expected.ownerId || next.username !== expected.username))) throw new ApiError('Secure authentication returned a different account.', 502);
     const remote = readSnapshot(result.vault, next.id);
@@ -192,28 +297,31 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     const nextKey = exportKey === null ? expected!.key : await unwrapVaultKeyOpaque(remote.keyEnvelope, exportKey, next.id);
     const fresh = validateData(await decryptVault(remote.dataEnvelope, nextKey, next.id)); check(token);
     user = next; key = nextKey; data = fresh; snapshot = remote; loaded = true; pending = null; pendingSetup = null; pendingVaultChange = null; pendingSecure = null;
+    passwordAuthenticatedAt = now(); verifiedEnrollmentEpoch = authenticationEpoch;
   }
   async function loginSecure(usernameInput: string, masterPassword: string): Promise<void> {
     const username = secureUsername(usernameInput);
     lock(); user = null; snapshot = null; loaded = false; const token = generation;
+    const authenticationEpoch = enrollmentEpoch();
     return serialAuth(token, async () => {
       const signed = await opaqueLogin(wire, username, masterPassword, cryptoAbort.signal, () => check(token));
       if (readUser(signed.result.user)?.username !== username) throw new ApiError('The secure sign-in account changed.', 502);
-      await acceptSecure(signed.result, signed.exportKey, token);
+      await acceptSecure(signed.result, signed.exportKey, token, authenticationEpoch);
     });
   }
   async function newMaster(value: string, username: string, token: number) {
     const policy = await masterPasswordError(value, username); check(token);
     if (policy) throw new ApiError(policy, 400);
   }
-  async function secureFinish(path: string, body: unknown, proposed: SecureCandidate, password: string, token: number, ownerId?: string) {
+  async function secureFinish(path: string, body: unknown, proposed: SecureCandidate, password: string, token: number, authenticationEpoch: string | null, ownerId?: string) {
+    const acceptedEpoch = revokeForAuthentication(authenticationEpoch);
     proposed.retrySalt = crypto.randomUUID();
     proposed.retryTag = await retryIdentity(password, proposed.retrySalt); check(token);
     if (proposed.original === undefined) proposed.original = snapshot;
     pendingSecure = proposed;
     try {
       const result = await wire(`/auth/opaque/${path}`, 'POST', body, ownerId); check(token);
-      await acceptSecure(result, null, token, proposed);
+      await acceptSecure(result, null, token, acceptedEpoch, proposed);
     } catch (error) {
       check(token);
       if (error instanceof ApiError && error.status > 0 && error.status < 500) { pendingSecure = null; throw error; }
@@ -221,7 +329,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       // OPAQUE login verifies the new credentials and exact wrapper before opening.
       try {
         const signed = await opaqueLogin(wire, proposed.username, password, cryptoAbort.signal, () => check(token));
-        await acceptSecure(signed.result, signed.exportKey, token, proposed);
+        await acceptSecure(signed.result, signed.exportKey, token, acceptedEpoch, proposed);
       } catch {
         check(token);
         throw new ApiError('Security change is unconfirmed. Keep this page open and retry with the same password. Keep both old and new passwords until sign-in confirms which one is active.', 0);
@@ -235,7 +343,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     try { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join(''); }
     finally { bytes.fill(0); }
   }
-  async function resumeSecure(kind: SecureCandidate['kind'], username: string, password: string, token: number) {
+  async function resumeSecure(kind: SecureCandidate['kind'], username: string, password: string, token: number, authenticationEpoch: string | null) {
     const proposed = pendingSecure;
     if (!proposed) return null;
     if (proposed.kind !== kind || proposed.username !== username) throw new ApiError('Finish the pending security change before another operation.', 409);
@@ -252,15 +360,15 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     }
     const remote = readSnapshot(signed.result.vault, proposed.ownerId);
     if (remote && proposed.original && remote.revision === proposed.original.revision && sameWrappedKey(remote.keyEnvelope, proposed.original.keyEnvelope) && sameEnvelope(remote.dataEnvelope, proposed.original.dataEnvelope)) { pendingSecure = null; return null; }
-    await acceptSecure(signed.result, signed.exportKey, token, proposed);
+    await acceptSecure(signed.result, signed.exportKey, token, authenticationEpoch, proposed);
     return proposed;
   }
   function registerSecure(usernameInput: string, masterPassword: string, name?: string): Promise<{ recoveryKey: string }> {
-    const username = secureUsername(usernameInput), token = generation;
+    const username = secureUsername(usernameInput), token = generation, authenticationEpoch = enrollmentEpoch();
     return serial(async () => serialAuth(token, async () => {
       if (user || key) throw new ApiError('Sign out before creating another account.', 409);
       await newMaster(masterPassword, username, token);
-      const resumed = await resumeSecure('register', username, masterPassword, token); if (resumed) return { recoveryKey: resumed.recoveryKey! };
+      const resumed = await resumeSecure('register', username, masterPassword, token, authenticationEpoch); if (resumed) return { recoveryKey: resumed.recoveryKey! };
       const publicKey = await opaqueConfig(wire, () => check(token));
       const start = await opaqueClient('startRegistration', { password: masterPassword }, cryptoAbort.signal); check(token);
       const response = await wire('/auth/opaque/register/start', 'POST', { username, registrationRequest: start.registrationRequest, ...(name === undefined ? {} : { name }) }); check(token);
@@ -270,16 +378,16 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       const nextKey = await createVaultKey(), recovery = await createSecureRecoveryKey(nextKey, ownerId);
       const dataEnvelope = await encryptVault(emptyData(), nextKey, ownerId), keyEnvelope = await wrapVaultKeyOpaque(nextKey, finished.exportKey, ownerId); check(token);
       const proposed: SecureCandidate = { kind: 'register', username, ownerId, key: nextKey, dataEnvelope, keyEnvelope, ...recovery };
-      await secureFinish('register/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, masterPassword, token);
+      await secureFinish('register/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, masterPassword, token, authenticationEpoch);
       return { recoveryKey: recovery.recoveryKey };
     }));
   }
   function recoverSecure(usernameInput: string, recoveryCode: string, newMasterPassword: string): Promise<{ recoveryKey: string }> {
-    const username = secureUsername(usernameInput), token = generation;
+    const username = secureUsername(usernameInput), token = generation, authenticationEpoch = enrollmentEpoch();
     return serial(async () => serialAuth(token, async () => {
       if (key) throw new ApiError('Lock the open records before recovering an account.', 409);
       await newMaster(newMasterPassword, username, token);
-      const resumed = await resumeSecure('recover', username, newMasterPassword, token); if (resumed) return { recoveryKey: resumed.recoveryKey! };
+      const resumed = await resumeSecure('recover', username, newMasterPassword, token, authenticationEpoch); if (resumed) return { recoveryKey: resumed.recoveryKey! };
       const recovery = await readSecureRecoveryKey(recoveryCode); check(token);
       const publicKey = await opaqueConfig(wire, () => check(token));
       const start = await opaqueClient('startRegistration', { password: newMasterPassword }, cryptoAbort.signal); check(token);
@@ -293,17 +401,18 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       const nextKey = await createVaultKey(), nextRecovery = await createSecureRecoveryKey(nextKey, recovery.ownerId);
       const dataEnvelope = await encryptVault(recoveredData, nextKey, recovery.ownerId), keyEnvelope = await wrapVaultKeyOpaque(nextKey, finished.exportKey, recovery.ownerId); check(token);
       const proposed: SecureCandidate = { kind: 'recover', username, ownerId: recovery.ownerId, key: nextKey, dataEnvelope, keyEnvelope, original: old, ...nextRecovery };
-      await secureFinish('recover/finish', { recoveryGrant: opaqueField(response.recoveryGrant, 'recovery confirmation'), registrationRecord: finished.registrationRecord, expectedRevision: old.revision, dataEnvelope, keyEnvelope, recoveryAuthHash: nextRecovery.recoveryAuthHash }, proposed, newMasterPassword, token);
+      await secureFinish('recover/finish', { recoveryGrant: opaqueField(response.recoveryGrant, 'recovery confirmation'), registrationRecord: finished.registrationRecord, expectedRevision: old.revision, dataEnvelope, keyEnvelope, recoveryAuthHash: nextRecovery.recoveryAuthHash }, proposed, newMasterPassword, token, authenticationEpoch);
       return { recoveryKey: nextRecovery.recoveryKey };
     }));
   }
   function migrateToSecure(newMasterPassword: string, legacyAccountPassword: string): Promise<{ recoveryKey: string }> {
+    const authenticationEpoch = enrollmentEpoch();
     return serial(async token => serialAuth(token, async () => {
       const ownerId = requireOwner(), username = user!.username;
       if (!username || user!.authMode === 'opaque-v1') throw new ApiError('Use the older account migration flow.', 409);
       if (newMasterPassword === legacyAccountPassword) throw new ApiError('Choose a new password that you have never used as the old account password.', 400);
       await newMaster(newMasterPassword, username, token);
-      const resumed = await resumeSecure('migrate', username, newMasterPassword, token); if (resumed) return { recoveryKey: resumed.recoveryKey! };
+      const resumed = await resumeSecure('migrate', username, newMasterPassword, token, authenticationEpoch); if (resumed) return { recoveryKey: resumed.recoveryKey! };
       if (pending || pendingSetup || pendingVaultChange) throw new ApiError('Finish the pending record change before migration.', 409);
       const remote = await readRemote(ownerId, token);
       if (remote && (!key || !data || !snapshot || remote.revision !== snapshot.revision || !sameWrappedKey(remote.keyEnvelope, snapshot.keyEnvelope) || !sameEnvelope(remote.dataEnvelope, snapshot.dataEnvelope))) throw new ApiError('Unlock and refresh the old encrypted records before migrating.', 409);
@@ -315,7 +424,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       const nextKey = await createVaultKey(), recovery = await createSecureRecoveryKey(nextKey, ownerId);
       const dataEnvelope = await encryptVault(data ?? emptyData(), nextKey, ownerId), keyEnvelope = await wrapVaultKeyOpaque(nextKey, finished.exportKey, ownerId); check(token, ownerId);
       const proposed: SecureCandidate = { kind: 'migrate', username, ownerId, key: nextKey, dataEnvelope, keyEnvelope, ...recovery };
-      await secureFinish('migrate/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, expectedRevision: remote?.revision ?? 0, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, newMasterPassword, token, ownerId);
+      await secureFinish('migrate/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, expectedRevision: remote?.revision ?? 0, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, newMasterPassword, token, authenticationEpoch, ownerId);
       return { recoveryKey: recovery.recoveryKey };
     }));
   }
@@ -328,7 +437,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
   }); }
   function unlockVault(secret: { vaultPassphrase: string } | { recoveryKey: string }) {
     if (user?.authMode === 'opaque-v1') return Promise.reject(new ApiError('Sign in securely with your single password to unlock this account.', 400));
-    const supplied = { ...secret };
+    const supplied = { ...secret }, authenticationEpoch = enrollmentEpoch();
     return serial(async token => {
     const ownerId = requireOwner();
     const remote = await readRemote(ownerId, token);
@@ -336,11 +445,13 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     const unlockedKey = 'recoveryKey' in supplied ? await importRecoveryKey(supplied.recoveryKey) : await unwrapVaultKey(remote.keyEnvelope, supplied.vaultPassphrase, ownerId, cryptoAbort.signal);
     const unlockedData = validateData(await decryptVault(remote.dataEnvelope, unlockedKey, ownerId)); check(token, ownerId);
     snapshot = remote; key = unlockedKey; data = unlockedData; loaded = true; pending = null; pendingSetup = null; pendingVaultChange = null;
+    passwordAuthenticatedAt = 'vaultPassphrase' in supplied ? now() : null;
+    verifiedEnrollmentEpoch = 'vaultPassphrase' in supplied ? authenticationEpoch : null;
     return structuredClone(data);
   }); }
   function setupVault(vaultPassphrase: string, initialData: AppData = emptyData()) {
     if (user?.authMode === 'opaque-v1') return Promise.reject(new ApiError('This account already uses secure one-password setup.', 400));
-    const initial = cloneVaultData(initialData);
+    const initial = cloneVaultData(initialData), authenticationEpoch = enrollmentEpoch();
     return serial(async token => {
     const ownerId = requireOwner();
     const signal = cryptoAbort.signal;
@@ -355,6 +466,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       if (found) {
         if (found.revision === 1 && sameEnvelope(found.dataEnvelope, proposed.dataEnvelope) && sameWrappedKey(found.keyEnvelope, proposed.keyEnvelope)) {
           snapshot = found; key = proposed.key; data = proposed.candidate; loaded = true; pendingSetup = null;
+          passwordAuthenticatedAt = now(); verifiedEnrollmentEpoch = authenticationEpoch;
           return { data: structuredClone(data), recoveryKey: proposed.recoveryKey };
         }
         pendingSetup = null; snapshot = found; loaded = true;
@@ -382,6 +494,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     check(token, ownerId);
     if (!remote || remote.revision !== 1 || !sameEnvelope(remote.dataEnvelope, dataEnvelope) || !sameWrappedKey(remote.keyEnvelope, keyEnvelope)) throw new ApiError('The cloud did not acknowledge this encrypted vault. Reload before continuing.', 502);
     snapshot = remote; key = proposed.key; data = proposed.candidate; loaded = true; pendingSetup = null;
+    passwordAuthenticatedAt = now(); verifiedEnrollmentEpoch = authenticationEpoch;
     return { data: structuredClone(candidate), recoveryKey };
   }); }
   async function logout(): Promise<void> {
@@ -444,11 +557,12 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     }));
   }
   function changeSecure(kind: 'change' | 'rotate', currentPassword: string, newPassword = currentPassword): Promise<{ recoveryKey?: string; user: CloudUser }> {
+    const authenticationEpoch = enrollmentEpoch();
     return serial(async token => serialAuth(token, async () => {
       const ownerId = requireUnlocked(), username = user!.username!;
       if (pending || pendingSetup || pendingVaultChange) throw new ApiError('Finish the pending save before changing security settings.', 409);
       if (kind === 'change') await newMaster(newPassword, username, token);
-      const resumed = await resumeSecure(kind, username, newPassword, token); if (resumed) return { recoveryKey: resumed.recoveryKey, user: structuredClone(user!) };
+      const resumed = await resumeSecure(kind, username, newPassword, token, authenticationEpoch); if (resumed) return { recoveryKey: resumed.recoveryKey, user: structuredClone(user!) };
       const remote = await readRemote(ownerId, token);
       if (!remote || remote.revision !== snapshot!.revision || !sameWrappedKey(remote.keyEnvelope, snapshot!.keyEnvelope) || !sameEnvelope(remote.dataEnvelope, snapshot!.dataEnvelope)) throw new ApiError('Records changed elsewhere. Refresh before changing security settings.', 409);
       const action: OpaqueAction = kind === 'change' ? 'change-password' : 'rotate-recovery';
@@ -460,7 +574,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
         const nextKey = await createVaultKey(), recovery = await createSecureRecoveryKey(nextKey, ownerId);
         const dataEnvelope = await encryptVault(data!, nextKey, ownerId), keyEnvelope = await wrapVaultKeyOpaque(nextKey, proof.exportKey, ownerId); check(token, ownerId);
         const proposed: SecureCandidate = { kind, username, ownerId, key: nextKey, dataEnvelope, keyEnvelope, ...recovery };
-        await secureFinish('rotate-recovery', { reauthGrant, expectedRevision: remote.revision, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, currentPassword, token, ownerId);
+        await secureFinish('rotate-recovery', { reauthGrant, expectedRevision: remote.revision, dataEnvelope, keyEnvelope, recoveryAuthHash: recovery.recoveryAuthHash }, proposed, currentPassword, token, authenticationEpoch, ownerId);
         return { recoveryKey: recovery.recoveryKey, user: structuredClone(user!) };
       }
       const publicKey = await opaqueConfig(wire, () => check(token, ownerId));
@@ -470,7 +584,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       const finished = await finishOpaqueRegistration(start.clientRegistrationState, response.registrationResponse, newPassword, username, publicKey, cryptoAbort.signal); check(token, ownerId);
       const keyEnvelope = await wrapVaultKeyOpaque(key!, finished.exportKey, ownerId); check(token, ownerId);
       const proposed: SecureCandidate = { kind, username, ownerId, key: key!, dataEnvelope: remote.dataEnvelope, keyEnvelope };
-      await secureFinish('change/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, expectedRevision: remote.revision, dataEnvelope: remote.dataEnvelope, keyEnvelope }, proposed, newPassword, token, ownerId);
+      await secureFinish('change/finish', { challengeId: opaqueField(response.challengeId, 'challenge'), registrationRecord: finished.registrationRecord, expectedRevision: remote.revision, dataEnvelope: remote.dataEnvelope, keyEnvelope }, proposed, newPassword, token, authenticationEpoch, ownerId);
       return { user: structuredClone(user!) };
     }));
   }
@@ -481,6 +595,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
   async function acceptVaultChange(proposed: VaultChange, remote: CloudVaultSnapshot, ownerId: string, token: number) {
     const fresh = validateData(await decryptVault(remote.dataEnvelope, proposed.key, ownerId)); check(token, ownerId);
     key = proposed.key; data = fresh; snapshot = remote; pendingVaultChange = null;
+    revokeAutoUnlock();
     return proposed.kind === 'rotate' ? { recoveryKey: proposed.recoveryKey! } : { recoveryKeyChanged: false as const };
   }
   function changeVault(kind: VaultChange['kind'], supplied: VaultSecret, newPassphrase: string, accountPassword: string) {
@@ -520,6 +635,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
         pendingVaultChange = proposed;
       }
       let acknowledged: CloudVaultSnapshot | null;
+      revokeAutoUnlock();
       try {
         acknowledged = readSnapshot((await wire('/vault', 'PUT', { expectedRevision: proposed.original.revision, dataEnvelope: proposed.dataEnvelope, keyEnvelope: proposed.keyEnvelope }, ownerId)).vault, ownerId);
         check(token, ownerId);
@@ -574,6 +690,45 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
     // Snapshot caller-owned input before this operation waits behind another save.
     // Enclosing it in AppData applies the cumulative size/accessor/cycle checks without serializing it first.
     const input = body === undefined ? undefined : (cloneVaultData({ ...emptyData(), checkins: [body] }).checkins[0] as unknown);
+    if (path === '/auth/verify-password' && method === 'POST') {
+      const verificationGeneration = autoUnlockGeneration;
+      let verificationEpoch: string;
+      try { verificationEpoch = deviceUnlock.epoch(); }
+      catch { throw new ApiError('Device auto-unlock storage is unavailable in this browser.', 0); }
+      return serial(async token => serialAuth(token, async () => {
+      const owner = requireUnlocked(ownerId), incoming = object(input);
+      if (Object.keys(incoming).length !== 1 || typeof incoming.password !== 'string' || !incoming.password || incoming.password.length > 1024)
+        throw new ApiError('Enter your current password.', 400);
+      if (pendingVaultChange || pendingSecure) throw new ApiError('Finish the pending security change before confirming your password.', 409);
+      const remote = await readRemote(owner, token);
+      if (!remote || !sameWrappedKey(remote.keyEnvelope, snapshot!.keyEnvelope)) throw new ApiError('Encryption settings changed. Sign in with your password again.', 409);
+      if (user!.authMode === 'opaque-v1') {
+        // This local route never forwards a master password to the legacy API.
+        // A fresh PAKE proof renews server authentication without replacing open
+        // records or pending saves, and checks the exact currently loaded key.
+        const proof = await opaqueLogin(wire, user!.username!, incoming.password, cryptoAbort.signal, () => check(token, owner));
+        const signedUser = readUser(proof.result.user);
+        if (signedUser?.id !== owner || signedUser.username !== user!.username || signedUser.authMode !== 'opaque-v1') {
+          lock(); throw new ApiError('The account changed. Sign in again.', 401);
+        }
+        const signed = readSnapshot(proof.result.vault, owner);
+        if (!signed || signed.revision < remote.revision || !sameWrappedKey(signed.keyEnvelope, remote.keyEnvelope)) {
+          revokeAutoUnlock(); throw new ApiError('Encryption settings changed. Sign in with your password again.', 409);
+        }
+        const verifiedKey = await unwrapVaultKeyOpaque(signed.keyEnvelope, proof.exportKey, owner);
+        await decryptVault(signed.dataEnvelope, verifiedKey, owner); check(token, owner);
+      } else {
+        const result = await wire('/auth/verify-password', 'POST', { password: incoming.password }, owner); check(token, owner);
+        if (result.ok !== true) throw new ApiError('Password confirmation failed.', 502);
+      }
+      if (verificationGeneration !== autoUnlockGeneration || verificationEpoch !== deviceUnlock.epoch()) {
+        passwordAuthenticatedAt = null; verifiedEnrollmentEpoch = null;
+        throw new ApiError('Automatic unlock was disabled while your password was being confirmed. Review the setting before trying again.', 409);
+      }
+      passwordAuthenticatedAt = now(); verifiedEnrollmentEpoch = verificationEpoch;
+      return { ok: true } as T;
+    }));
+    }
     if (user?.authMode === 'opaque-v1' && path === '/auth/change-password' && method === 'POST') {
       if (ownerId) requireOwner(ownerId);
       const incoming = object(input);
@@ -617,6 +772,7 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
         check(token, owner);
         if (matchesVault) throw new ApiError('Use different account and encryption passwords.', 400);
         const result = await wire('/auth/change-password', 'POST', { currentPassword: incoming.currentPassword, newPassword: incoming.newPassword }, owner); check(token, owner);
+        revokeAutoUnlock();
         const nextUser = readUser(result.user);
         if (nextUser?.id !== owner) { lock(); throw new ApiError('The account changed. Sign in again.', 401); }
         user = nextUser; return result as T;
@@ -725,6 +881,6 @@ export function createCloudClient(options: { apiBase?: string; fetch?: typeof fe
       return await save(validated, result, signature, owner, token) as T;
     });
   }
-  return { session, login, register, registerSecure, loginSecure, recoverSecure, migrateToSecure, loadVault, setupVault, unlockVault, lock, logout, logoutAll, deleteAccount, changeVaultPassword, rotateVaultKey, request,
+  return { session, login, register, registerSecure, loginSecure, recoverSecure, migrateToSecure, loadVault, setupVault, unlockVault, getAutoUnlockPreference, setAutoUnlockPreference, tryAutoUnlock, lock, logout, logoutAll, deleteAccount, changeVaultPassword, rotateVaultKey, request,
     getState: () => ({ user: structuredClone(user), locked: !key || !data, vaultExists: loaded ? snapshot !== null : null, revision: snapshot?.revision ?? 0 }) };
 }

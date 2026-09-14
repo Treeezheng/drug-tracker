@@ -27,7 +27,7 @@ test('invalid saved amounts, quantities and strengths qualify the total instead 
     assert.equal(total.complete,false);assert.equal(timelineReading(total,at),'4.30*');
     assert.equal(timelineReading(groupedTotals([invalid],at).Methylphenidate,at),'—');
     assert.equal(hasMissingTimelineData([invalid],start,end,true),true);
-    assert.match(render([known,invalid]),/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);
+    assert.match(render([known,invalid]),/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
     assert.equal(JSON.stringify(invalid),snapshot);
   }
 });
@@ -40,7 +40,7 @@ test('missing or malformed saved times survive scope selection without inventing
     assert.equal(concentration(invalid,at).value,null);
     assert.equal(hasMissingTimelineData(scoped.doses,start,end,true),true);
     const html=render(scoped.doses);
-    assert.match(html,/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);assert.match(html,/Time unavailable/);assert.match(html,/\* No drug data/);
+    assert.match(html,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);assert.match(html,/Time unavailable/);assert.match(html,/\* No drug data/);
     assert.doesNotMatch(html,/NaN|Infinity/);
   }
 });

@@ -71,7 +71,7 @@ DTR1.<ownerId>.<32-byte auth token base64url>.<32-byte DEK base64url>
 
 策略只在客户端执行：服务器从来拿不到新主密码，无法诚实宣称在服务端检查其长度/评分。zxcvbn 字典与 WASM 都随本站构建，不调用第三方密码服务或 CDN。[zxcvbn-ts](https://zxcvbn-ts.github.io/zxcvbn/guide/getting-started/)
 
-OPAQUE/旧 Argon2 每次计算在一次性同源 Worker 里运行，锁定中止 Worker；CSP 只为 WebAssembly 允许 `wasm-unsafe-eval`，没有允许 JavaScript `unsafe-eval`。client key、解密数据、待确认恢复码仅驻内存；没有账户明文 IndexedDB/localStorage/outbox。临时 byte arrays 尽量擦除，但 JavaScript 字符串、GC 副本、CryptoKey 内部不能承诺物理清零。
+OPAQUE/旧 Argon2 每次计算在一次性同源 Worker 里运行，锁定中止 Worker；CSP 只为 WebAssembly 允许 `wasm-unsafe-eval`，没有允许 JavaScript `unsafe-eval`。使用中的DEK、解密数据、待确认恢复码驻内存；没有账户明文 IndexedDB/localStorage/outbox。用户启用此浏览器自动解锁后，专用IndexedDB持久化非可导出的AES-256-GCM wrapping CryptoKey与加密DEK，期限固定为显式密码认证起7天；不保存密码或OPAQUE export secret，配套localStorage仅含公开撤销epoch。恢复必须取得有效server session与匹配owner/包装的新vault，Hide/注销/禁用或安全变更撤销旧副本。见[客户端生命周期](./cloud-client-design.md#此浏览器自动解锁)。临时 byte arrays 尽量擦除，但 JavaScript 字符串、GC 副本、CryptoKey 内部不能承诺物理清零。
 
 ## 兼容范围与失败语义
 

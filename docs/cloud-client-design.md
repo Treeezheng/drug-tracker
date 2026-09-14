@@ -1,6 +1,6 @@
 # 云端单密码客户端
 
-核对日期：2026-09-13。`cloud-client.ts` 经同源 `/drug/api` 连接云 API，`cloud-opaque-flow.ts` 编排 OPAQUE，`opaque-client.ts` / `opaque.worker.ts` 运行固定1.1.0协议库，`vault-crypto.ts` 加密完整 AppData。这里描述本轮源码，不自动代表已部署版本。
+核对日期：2026-09-14。`cloud-client.ts` 经同源 `/drug/api` 连接云 API，`cloud-opaque-flow.ts` 编排 OPAQUE，`opaque-client.ts` / `opaque.worker.ts` 运行固定1.1.0协议库，`vault-crypto.ts` 加密完整 AppData。这里描述本轮源码，不自动代表已部署版本。
 
 ## 新账户与登录
 
@@ -26,7 +26,7 @@ recoverSecure(username, recoveryCode, newMasterPassword) // -> {recoveryKey}, op
 | POST `/vault/rotate-key` `{password}` | OPAQUE fresh reauth取得rotate-purpose grant；新DEK重加密全部记录 + 新auth恢复token；原子替换后返回新完整恢复码 |
 | POST `/auth/logout-all` `{password}` | 同步清本地key/data，再用仅公开username/id和新worker完成fresh reauth；网络只发送logout-purpose grant；服务器撤销所有sessions |
 | DELETE `/account` `{password}` | fresh OPAQUE proof + delete-purpose grant；成功删除账户/vault/sessions并清客户端；错误密码保留当前资料；可能已提交的断线错误先锁定 |
-| GET `/security` | 返回当前session建立/到期时间、活动会话数和24小时寿命，不返回健康记录 |
+| GET `/security` | 返回当前session建立/到期时间、活动会话数和7天（168小时）寿命，不返回健康记录 |
 
 grant均绑定owner、session、认证version、用途、请求来源和TTL；服务器提交时再次检查。客户端不用sessionKey包装DEK。`recovery/start`只发码内owner及新registration request；`recover/authorize`只发32-byte auth部分；浏览器本地解密旧vault成功后才发送新加密组合。完整恢复码与DEK部分不进入body。
 
@@ -42,7 +42,7 @@ grant均绑定owner、session、认证version、用途、请求来源和TTL；�
 
 ## 数据隔离与导入导出
 
-云账户key、解密数据、pending只在client闭包内，没有账户明文 IndexedDB/localStorage/Cache API/outbox。请求使用same-origin credentials、no-store、服务器确认owner的 `X-Dose-Owner`，AAD绑定同owner。profile、doses、scenarios、favorites、checkins、inventory整体加密。
+云账户解密数据、待确认材料与使用中的DEK在client闭包内，没有账户明文 IndexedDB/localStorage/Cache API/outbox。可选浏览器自动解锁仅持久化下述包装key与加密DEK，不持久化密码、OPAQUE export secret、恢复码或账户明文。请求使用same-origin credentials、no-store、服务器确认owner的 `X-Dose-Owner`，AAD绑定同owner。profile、doses、scenarios、favorites、checkins、inventory整体加密。
 
 访客默认只在内存；18岁声明后明确Remember才使用独立明文localStorage，账户登录不自动导入。Guest绿色Add只是校验并折叠simulated行，不写正式账户数据。本机SQLite与用户明确导出的CSV/JSON都是明文，不能称为云端密文。
 
@@ -54,7 +54,19 @@ grant均绑定owner、session、认证version、用途、请求来源和TTL；�
 
 ## 锁定和剩余边界
 
-lock同步清key/data/pending并中止Worker；Gate还必须卸载App及持有明文的组件。logout/logout-all在等待远端前锁定；失败不能宣称远端注销成功。10分钟闲置锁在focus/visibility时补检；已开账户约60秒及聚焦时检查session。冻结/离线浏览器不能保证准点执行；不能远程抹除别人已读的内存或导出。
+`lock()`同步清key/data/pending并中止Worker，默认撤销本浏览器自动解锁；Gate还必须卸载App及持有明文的组件。显式Hide、logout/logout-all与禁用设置撤销保存的key；logout在等待远端前先锁定，失败不能宣称远端注销成功。pagehide/unmount调用`lock({preserveAutoUnlock:true})`清内存，保留仍有效的自动解锁记录。关闭自动解锁后，下次刷新需要密码，但当前打开的记录不立即关闭。
+
+打开的云账户使用7天idle上限与本次密码认证起算的固定绝对deadline，即使持续活动也不能延长；自动恢复沿用已保存deadline。focus/visibility及交互时补检，已开账户约60秒及聚焦时检查server session。服务端会话最长为建立起7天，不滑动续期；更短旧会话保留原到期时间。冻结/离线浏览器不能保证准点执行或确认远端撤销，不能远程抹除别人已读的内存或导出。
+
+### 此浏览器自动解锁
+
+注册/登录表单的显式checkbox默认开启，仅成功提交密码认证后调用`setAutoUnlockPreference(true)`；关闭checkbox不保存key。设置页可通过OPAQUE再次确认密码后启用，禁用无需重新输入密码。`getAutoUnlockPreference()`只返回enabled/expiry，`tryAutoUnlock()`不能把自动恢复当成新密码认证、不能续期。
+
+`device-unlock.ts`使用专用IndexedDB数据库`dose-device-unlock`的`keys` store，按API base scope隔离。记录包含version/id/scope、公开revocation epoch、ownerId、规范化key-envelope的SHA-256 fingerprint、createdAt/expiresAt、non-extractable AES-256-GCM wrapping CryptoKey、随机IV和加密DEK。AAD绑定这些公开身份及期限字段。唯一配套localStorage值为`dose-device-unlock-revocation:<apiBase>`下的公开随机epoch；Hide/禁用/注销先同步更新墓碑，因此较晚的IDB写入或删除不能把旧key重新启用。此独立store的清理不触及本机版共享队列或访客模拟。
+
+保存期限固定为显式成功密码认证时间+7天；访问、自动恢复与读取偏好均不能刷新期限。恢复前获取最新`/session`及`/vault`，检查owner、auth模式、包装fingerprint、期限/metadata；本地解密与领域schema验证通过后再次检查session及存储record仍有效，才发布明文。没有有效服务端session、不能取得新vault、包装发生变化或期限已过时不自动打开。较短/被撤销的server session优先。Hide、注销、切换账户、server401与密码/key安全变更撤销旧保存记录；过期/无效记录在读取时尝试清理，没有承诺定时物理删除。
+
+服务器不接收上述本机wrapping key或DEK。浏览器非可导出CryptoKey只限制原始key导出API，不限制同源JS调用解密；可使用同一浏览器profile的人、恶意同源脚本或被控制的设备可能打开记录。不是硬件Secure Enclave或特定厂商安全级别的保证。
 
 同一已开认证会话拒绝已见revision的回退，但刷新后没有独立可信最新状态锚点。网络请求没有统一deadline：永不结束的响应仍可阻塞认证串行队列，需重载恢复可用性；不能为了释放队列允许晚cookie覆盖新账户。该已知可用性边界没有被声称修复。
 
