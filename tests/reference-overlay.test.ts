@@ -12,7 +12,8 @@ test('generic 10 mg can show an identified Ritalin source illustration while its
   const original=dose(),before=structuredClone(original),overlay=referenceOverlay(original,peak)!;
   assert.equal(overlay.value,4.3);assert.equal(overlay.unit,'ng/mL');
   assert.equal(overlay.referenceProductId,'ritalin');assert.equal(overlay.originalProductId,'methylphenidate-ir');
-  assert.equal(overlay.referenceEvidence,'B');assert.match(overlay.reason,/No direct data.*reference only/);
+  assert.equal(overlay.referenceEvidence,'B');assert.match(overlay.reason,/reference simulation; no direct measurements/);
+  assert.equal(overlay.doseScale,1);assert.equal(overlay.referenceDoseMg,10);
   assert.deepEqual(overlay.sourceIds,['S2','S3']);assert.ok(overlay.sourceIds.every(id=>sources.some(source=>source.id===id&&source.url.startsWith('https://'))));
   assert.equal(concentration(original,peak).value,null);assert.equal(concentration(original,peak).evidence,'D');
   const alone=groupedTotals([original],peak).Methylphenidate;assert.equal(alone.complete,false);assert.equal(alone.items[0].value,null);
@@ -31,7 +32,6 @@ test('source illustration follows the recorded instant across midnight without a
 test('invalid, fractional, altered, custom and unsupported entries never gain the reference overlay',()=>{
   const original=dose();
   for(const patch of [
-    {strength:'5',packageStrength:'5',quantity:'2'},
     {strength:'2.5',packageStrength:'2.5',quantity:'4'},
     {strength:'20',packageStrength:'20',quantity:'.5'},
     {quantity:'1.5',amountMg:'15'},
@@ -44,4 +44,24 @@ test('invalid, fractional, altered, custom and unsupported entries never gain th
   for(const [productId,strength] of [['ritalin','10'],['concerta','18'],['ritalin-la','10'],['methylin-solution','1'],['focalin','10'],['amphetamine-salts-ir','10'],['metformin-ir','500']])assert.equal(referenceForDose(dose(productId,strength)),null);
   const decimal={...original,strength:'10.00',packageStrength:'10.000',quantity:'1.00',amountMg:'10.00'};
   assert.equal(referenceOverlay(decimal,peak)?.value,4.3);
+});
+
+test('listed IR and Concerta strengths can use an explicit scaled reference without gaining direct evidence',()=>{
+  for(const productId of ['methylphenidate-ir','ritalin']){
+    for(const [strength,wanted] of [['5',2.15],['20',8.6]] as const){
+      const original=dose(productId,strength),before=structuredClone(original),reference=referenceOverlay(original,peak)!;
+      assert.equal(reference.value,wanted);assert.equal(reference.doseScale,Number(strength)/10);
+      assert.match(reference.reason,/proportional scaling is unvalidated/i);
+      assert.equal(concentration(original,peak).value,null);assert.deepEqual(original,before);
+    }
+  }
+  const pair={...dose('methylphenidate-ir','5'),quantity:'2',amountMg:'10'};
+  assert.equal(referenceOverlay(pair,peak)?.value,4.3);assert.equal(concentration(pair,peak).value,null);
+  const doubled=dose('concerta','36'),baseline=dose('concerta','18');
+  assert.equal(referenceOverlay(doubled,peak)?.value,concentration(baseline,peak).value!*2);
+  assert.equal(referenceForDose(doubled)?.referenceEvidence,'A');
+  assert.deepEqual(referenceForDose(doubled)?.sourceIds,['S1']);
+  assert.equal(referenceOverlay(doubled,instant+72*3_600_000,true)?.value,null);
+  assert.equal(referenceOverlay(doubled,instant+72*3_600_000,false)?.tail,true);
+  assert.equal(concentration(doubled,peak).value,null);
 });

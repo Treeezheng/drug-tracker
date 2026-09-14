@@ -95,23 +95,20 @@ test('a failed first addition cannot remove existing strengths', async () => {
   assert.deepEqual(pending.map(change => change.type), ['save', 'remove']);
 });
 
-test('picker keeps one ingredient heading but identifies the active product and other saved variants', () => {
+test('picker presents one ingredient/formulation and deduplicated strengths without a brand-selection step', () => {
   const html = renderToStaticMarkup(createElement(FavoritePicker, {
     favorites: [favorite('five'), favorite('ten', '10'), favorite('generic', '10', { productId: 'methylphenidate-ir' })],
     onSave: () => {}, onRemove: () => {}, onClose: () => {},
   }));
   assert.equal((html.match(/<h4>Methylphenidate IR<\/h4>/g) || []).length, 1);
-  for (const label of ['Methylphenidate IR · Ritalin 5 mg', 'Methylphenidate IR · Ritalin 10 mg']) {
+  for (const label of ['Methylphenidate IR 5 mg', 'Methylphenidate IR 10 mg']) {
     const input = html.match(new RegExp(`<input[^>]*aria-label="${label}"[^>]*>`));
     assert.ok(input, `Missing ${label}`); assert.match(input[0], /checked=""/);
   }
-  assert.match(html, /3 strengths selected/);
-  assert.equal((html.match(/aria-label="Methylphenidate IR · Ritalin 10 mg"/g) || []).length, 1);
-  assert.match(html, /aria-label="Product for Methylphenidate IR"/);
-  assert.match(html, /<option value="ritalin" selected="">Ritalin<\/option>/);
-  assert.match(html, /<option value="methylphenidate-ir">Generic<\/option>/);
-  assert.match(html, /Also selected: Generic 10 mg/);
-  assert.match(html, /Curve data: Ritalin 10 mg only, a parameter estimate/);
+  assert.match(html, /2 strengths selected/);
+  assert.equal((html.match(/aria-label="Methylphenidate IR 10 mg"/g) || []).length, 1);
+  assert.doesNotMatch(html, /Product for |Also selected:|Curve data:|<select/);
+  assert.match(html, /<h4>Methylphenidate IR<\/h4><p class="fp-formulation">Immediate-release tablet<\/p>/);
   assert.match(html, /aria-label="Search brand or ingredient"/);
   assert.doesNotMatch(html, /Preferred strength/);
 });

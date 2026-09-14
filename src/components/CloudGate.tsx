@@ -6,6 +6,7 @@ import { createCloudClient } from '../lib/cloud-client';
 import GuestSimulator from './GuestSimulator';
 import Modal from './Modal';
 import { startIdleLock } from '../lib/idle-lock';
+import { startCloudSessionRestore } from '../lib/cloud-session-restore';
 import { GUEST_STORAGE_KEY, parseGuestWorkspace, type GuestWorkspace } from '../lib/guest-workspace';
 import { clearTransferredGuest } from '../lib/guest-transfer-storage';
 import { withGuestStorageLock } from '../lib/guest-storage-lock';
@@ -22,6 +23,7 @@ export default function CloudGate(){
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
   const [acceptedTerms,setAcceptedTerms]=useState(false);
   const inFlight=useRef(false),flow=useRef(0);
+  const sessionRestore=useRef<ReturnType<typeof startCloudSessionRestore>|null>(null);
   const guest=useRef<GuestWorkspace|null>(null),transfer=useRef<{workspace:GuestWorkspace;input:GuestTransfer|null;saved:string|null|undefined;uploaded:boolean}|null>(null);
   // Guest retry material contains no account key or decrypted account records.
   const preparedTransfer=useRef<{ownerId:string;snapshot:string;input:GuestTransfer}|null>(null);
@@ -32,16 +34,24 @@ export default function CloudGate(){
 
   function clearSecrets(){setPassword('');setSecret('');setConfirmation('');setRecoveryKey('');setAcceptedTerms(false);}
   function resetFlow(next:Stage,message=''){
+    sessionRestore.current?.cancel();
     flow.current++;client.lock();configureCloudTransport(null);clearSecrets();transfer.current=null;setTransferUploaded(false);inFlight.current=false;setBusy(false);setError('');setNotice(message);setStage(next);
   }
   function browse(){resetFlow('guest');}
   useEffect(()=>{
-    // A page restored from the back/forward cache must not retain an unlocked vault.
-    const clear=()=>resetFlow('guest');
-    window.addEventListener('pagehide',clear);
-    const restore=(event:PageTransitionEvent)=>{if(event.persisted)clear();};
-    window.addEventListener('pageshow',restore);
-    return()=>{window.removeEventListener('pagehide',clear);window.removeEventListener('pageshow',restore);client.lock();configureCloudTransport(null);};
+    const restore=startCloudSessionRestore({
+      readSession:()=>client.session(),
+      onLock:()=>resetFlow('guest'),
+      onSession:user=>{
+        if(user?.authMode==='opaque-v1'&&user.username){
+          setUsername(user.username);
+          resetFlow('unlock','Still signed in. Enter your password to unlock your records on this device.');
+        }else resetFlow('guest');
+      },
+      onUnavailable:()=>setNotice('Could not check your sign-in. Your session may still be active. Reconnect and sign in to unlock your records.'),
+    });
+    sessionRestore.current=restore;
+    return()=>{restore.stop();if(sessionRestore.current===restore)sessionRestore.current=null;client.lock();configureCloudTransport(null);};
   },[client]);
   useEffect(()=>{
     if(stage!=='open'&&stage!=='recovery'&&stage!=='guest-sync')return;
@@ -65,6 +75,7 @@ export default function CloudGate(){
         resetFlow('unlock');return {ok:true} as T;
       }
       if((path==='/auth/logout'||path==='/auth/logout-all')&&method==='POST'){
+        sessionRestore.current?.cancel();
         const request=client.request<T>(path,method,body,ownerId);
         // Logout clears the client key synchronously. Remove App's plaintext immediately,
         // without invalidating the in-flight sign-out request's generation.
@@ -162,6 +173,7 @@ export default function CloudGate(){
   }
   async function signOut(){
     if(inFlight.current)return;
+    sessionRestore.current?.cancel();
     const request=client.logout();flow.current++;const token=flow.current;
     configureCloudTransport(null);clearSecrets();setError('');setStage('guest');
     try{await request;}catch{if(token===flow.current)setNotice('This device is locked. Server sign out could not be confirmed; its session may still be active.');}
@@ -174,12 +186,12 @@ export default function CloudGate(){
   return <><GuestSimulator onSignIn={beginSignIn} onRegister={beginRegistration} onWorkspace={rememberWorkspace} initialWorkspace={guest.current??undefined} initialConsent={guestConsent.current} onConsent={rememberConsent} notice={notice}/>{stage!=='guest'&&<Modal title={title} onClose={browse} closeDisabled={stage==='recovery'||(stage==='guest-sync'&&busy)}><div className="cloud-auth-dialog" aria-busy={busy}>
     {['unlock','recovery'].includes(stage)&&<p className="muted">Account · {client.getState().user?.name||accountName}</p>}
     {notice&&<p className="notice" role="status">{notice}</p>}
-    {stage==='guest-sync'?<div className="guest-transfer-choice"><p>Move this guest simulation into your encrypted account?</p><p className="muted">{transfer.current?.workspace.drafts.length||0} simulated doses · {transfer.current?.workspace.favorites.length||0} saved medications</p><p>Records stay marked as simulated. After encrypted sync is confirmed, this device’s saved guest copy is removed. If sync fails, it is kept for retry.</p>{error&&<p className="inline-error" role="alert">{error}</p>}<div className="modal-footer"><button className="button secondary" disabled={busy} onClick={()=>{transfer.current=null;openRecords();}}>{transferUploaded?'Continue; keep local copy':'Keep separate'}</button><button className="button primary" disabled={busy} onClick={()=>void syncGuest()}>{busy?'Syncing…':transferUploaded?'Retry local cleanup':'Sync and remove local copy'}</button></div></div>:stage==='recovery'?<RecoveryKeyPanel recoveryKey={recoveryKey} onDone={()=>{try{finishSignIn();}catch(cause){setError((cause as Error).message);}}}/>:<form key={stage} id={`cloud-${stage}-form`} name={`cloud-${stage}`} method="post" className="auth-form" onSubmit={submit}>
+    {stage==='guest-sync'?<div className="guest-transfer-choice"><p>Move this guest simulation into your encrypted account?</p><p className="muted">{transfer.current?.workspace.drafts.length||0} simulated doses · {transfer.current?.workspace.favorites.length||0} saved medications</p><p>Records stay marked as simulated. After encrypted sync is confirmed, this device’s saved guest copy is removed. If sync fails, it is kept for retry.</p>{error&&<p className="inline-error" role="alert">{error}</p>}<div className="modal-footer"><button className="button secondary" disabled={busy} onClick={()=>{transfer.current=null;openRecords();}}>{transferUploaded?'Continue; keep local copy':'Keep separate'}</button><button className="button primary" disabled={busy} onClick={()=>void syncGuest()}>{busy?'Syncing…':transferUploaded?'Retry local cleanup':'Sync and remove local copy'}</button></div></div>:stage==='recovery'?<RecoveryKeyPanel recoveryKey={recoveryKey} onDone={()=>{try{finishSignIn();}catch(cause){setError((cause as Error).message);}}}/>:<form key={stage} id={`cloud-${stage}-form`} name={`cloud-${stage}`} method="post" autoComplete="on" className="auth-form" onSubmit={submit}>
       <p className="muted">{stage==='register'?'One password signs you in and unlocks your encrypted records. You will receive a recovery key to save. After sign-in, you can choose whether to sync your guest simulation and remove its local copy.':stage==='recover'?'Use your saved recovery key and choose a new password. Your recovery key will also be replaced.':'Your password unlocks your records in this browser. It is not sent to the server.'}</p>
-      {['login','register','recover'].includes(stage)?<><label className="field"><span>Username</span><input id="cloud-account-username" type="text" autoFocus autoComplete="username" name="username" defaultValue={username} onChange={e=>setUsername(e.target.value)} required disabled={busy} minLength={stage==='register'?3:undefined} maxLength={64} pattern={stage==='register'?'[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,63}':undefined} aria-describedby={stage==='register'?'cloud-username-hint':undefined} autoCapitalize="none" spellCheck={false}/></label>{stage==='register'&&<p className="field-hint" id="cloud-username-hint">3–64 letters, numbers, periods, underscores or hyphens.</p>}</>:<input type="hidden" name="username" autoComplete="username" value={accountName}/>}
-      {stage==='recover'&&<label className="field"><span>Recovery key</span><input id="cloud-recovery-code" name="recovery-code" type="text" autoComplete="off" defaultValue={secret} onChange={e=>setSecret(e.target.value)} required disabled={busy} maxLength={1024} spellCheck={false} autoCapitalize="none"/></label>}
-      <label className="field"><span>{stage==='recover'?'New password':'Password'}</span><input id={newPassword?'cloud-new-password':'cloud-current-password'} type="password" name="password" autoComplete={newPassword?'new-password':'current-password'} defaultValue={password} onChange={e=>setPassword(e.target.value)} autoFocus={stage==='unlock'} required disabled={busy} minLength={newPassword?15:undefined} maxLength={512}/></label>{newPassword&&<p className="field-hint">Use a unique password of at least 15 characters. A password manager can generate and save it. Common or predictable passwords are rejected.</p>}
-      {stage==='recover'&&<label className="field"><span>Confirm new password</span><input id="cloud-confirm-password" name="confirm-password" type="password" autoComplete="new-password" defaultValue={confirmation} onChange={e=>setConfirmation(e.target.value)} required disabled={busy} maxLength={512}/></label>}
+      {['login','register','recover'].includes(stage)?<><label className="field" htmlFor="cloud-account-username"><span>Username</span><input id="cloud-account-username" type="text" autoFocus autoComplete="username" name="username" defaultValue={username} onChange={e=>setUsername(e.target.value)} required disabled={busy} minLength={stage==='register'?3:undefined} maxLength={64} pattern={stage==='register'?'[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,63}':undefined} aria-describedby={stage==='register'?'cloud-username-hint':undefined} autoCapitalize="none" autoCorrect="off" enterKeyHint="next" spellCheck={false}/></label>{stage==='register'&&<p className="field-hint" id="cloud-username-hint">3–64 letters, numbers, periods, underscores or hyphens.</p>}</>:<input type="hidden" name="username" autoComplete="username" value={accountName}/>}
+      {stage==='recover'&&<label className="field" htmlFor="cloud-recovery-code"><span>Recovery key</span><input id="cloud-recovery-code" name="recovery-code" type="text" autoComplete="off" defaultValue={secret} onChange={e=>setSecret(e.target.value)} required disabled={busy} maxLength={1024} spellCheck={false} autoCapitalize="none" autoCorrect="off" enterKeyHint="next"/></label>}
+      <label className="field" htmlFor={newPassword?'cloud-new-password':'cloud-current-password'}><span>{stage==='recover'?'New password':'Password'}</span><input id={newPassword?'cloud-new-password':'cloud-current-password'} type="password" name="password" autoComplete={newPassword?'new-password':'current-password'} defaultValue={password} onChange={e=>setPassword(e.target.value)} autoFocus={stage==='unlock'} required disabled={busy} minLength={newPassword?15:undefined} maxLength={512} autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint={stage==='recover'?'next':'done'} aria-describedby={newPassword?'cloud-password-hint':undefined} {...(newPassword?{passwordrules:'minlength: 15; maxlength: 512;'}:{})}/></label>{newPassword&&<p className="field-hint" id="cloud-password-hint">Use a unique password of at least 15 characters. A password manager can generate and save it. Common or predictable passwords are rejected.</p>}
+      {stage==='recover'&&<label className="field" htmlFor="cloud-confirm-password"><span>Confirm new password</span><input id="cloud-confirm-password" name="confirm-password" type="password" autoComplete="new-password" defaultValue={confirmation} onChange={e=>setConfirmation(e.target.value)} required disabled={busy} maxLength={512} autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="done"/></label>}
       {error&&<p className="inline-error" role="alert">{error}</p>}
       {stage==='register'&&<label className="legal-acceptance"><input type="checkbox" required checked={acceptedTerms} onChange={event=>setAcceptedTerms(event.target.checked)} disabled={busy}/><span>I am 18 or older, agree to the <a href={`${import.meta.env.BASE_URL}terms.html`} target="_blank" rel="noreferrer">Terms of Use</a>, and acknowledge the <a href={`${import.meta.env.BASE_URL}privacy.html`} target="_blank" rel="noreferrer">Privacy Policy</a>.</span></label>}
       <button className="button primary full" disabled={busy||(stage==='register'&&!acceptedTerms)}>{busy?'One moment…':stage==='register'?'Create account':stage==='recover'?'Recover account':stage==='unlock'?'Unlock':'Sign in'}</button>

@@ -2,8 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { products } from '../lib/catalog';
 import { commitFavoriteChanges, favoriteChanges, favoriteSelection } from '../lib/favorite-selection';
-import { groupMedicationProducts, matchesMedicationGroup, medicationDisplay, medicationVariantGroup, type MedicationGroup } from '../lib/medication-display';
-import { groupStrengthSelected, groupStrengths, selectGroupStrength } from '../lib/grouped-favorite-selection';
+import { groupMedicationProducts, matchesMedicationGroup, type MedicationGroup } from '../lib/medication-display';
+import { groupStrengthSelected, groupStrengths, selectGroupStrength, selectedGroupCount } from '../lib/grouped-favorite-selection';
 import { parseCustomStrength } from '../lib/package-strength';
 import type { FavoriteChange } from '../lib/favorite-selection';
 import type { Favorite } from '../lib/types';
@@ -17,20 +17,15 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
   onComplete?: (selection: Favorite[]) => void;
 }) {
   const [selection, setSelection] = useState(() => favoriteSelection(favorites));
-  const [variants, setVariants] = useState<Record<string, string>>({});
   const [query, setQuery] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [custom, setCustom] = useState<string | null>(null), [customValue, setCustomValue] = useState(''), [customError, setCustomError] = useState('');
   const container = useRef<HTMLDivElement>(null), inFlight = useRef(false), pending = useRef<FavoriteChange[] | null>(null);
   const hintId = useId();
   const needle = query.trim().toLocaleLowerCase();
   const grouped = groupMedicationProducts(products).filter(group => matchesMedicationGroup(group, needle));
-  const selectedCount = selection.size;
+  const selectedCount = selectedGroupCount(selection);
   const families = [...new Set(grouped.map(group => group.family))];
   const unknown = favorites.filter(favorite => !products.some(product => product.id === favorite.productId));
-  function selectedVariant(group: MedicationGroup): MedicationGroup {
-    const productId = variants[group.id] ?? favorites.find(favorite => group.products.some(product => product.id === favorite.productId))?.productId ?? group.defaultProduct.id;
-    return medicationVariantGroup(group, productId);
-  }
 
   useEffect(() => {
     const dialog = container.current?.closest('dialog');
@@ -59,7 +54,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
     if (inFlight.current) return;
     let nextSelection = selection;
     if (custom && customValue.trim()) {
-      const group = selectedVariant(groupMedicationProducts(products).find(group => group.id === custom)!);
+      const group = groupMedicationProducts(products).find(group => group.id === custom)!;
       try {
         nextSelection = selectGroupStrength(selection, favorites, group, parseCustomStrength(group.defaultProduct, customValue), true);
         setSelection(nextSelection); pending.current = null;
@@ -86,17 +81,16 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
         <legend className="sr-only">Medication strengths</legend>
         {families.map(family => <section className="fp-family" key={family}>
           <h3>{family}</h3>
-          {grouped.filter(group => group.family === family).map(fullGroup => {
-            const group = selectedVariant(fullGroup), product = group.defaultProduct, display = medicationDisplay(product);
-            const otherSelections = [...selection.values()].filter(favorite => favorite.productId !== product.id && fullGroup.products.some(item => item.id === favorite.productId));
+          {grouped.filter(group => group.family === family).map(group => {
+            const product = group.defaultProduct;
             return <section className="fp-product-group" key={group.id}>
-            <div className="fp-name"><h4>{group.title}</h4>{fullGroup.products.length > 1 ? <><label className="fp-variant"><span className="sr-only">Product for {group.title}</span><select aria-label={`Product for ${group.title}`} value={product.id} onChange={event => { setVariants(current => ({ ...current, [group.id]: event.target.value })); setCustom(null); setCustomValue(''); setCustomError(''); }}>{fullGroup.products.map(item => <option value={item.id} key={item.id}>{medicationDisplay(item).variant || item.name}</option>)}</select></label>{otherSelections.length > 0 && <p className="fp-formulation">Also selected: {otherSelections.map(favorite => `${medicationDisplay(fullGroup.products.find(item => item.id === favorite.productId)!).variant} ${favorite.packageStrength || favorite.strength} ${product.strengthUnit}`).join(', ')}</p>}</> : group.brand ? <small className="fp-brand">{display.variant || group.brand}</small> : <p className="fp-formulation">{product.formulation}</p>}{group.id === 'methylphenidate-ir-display' && <p className="fp-model-note">Curve data: Ritalin 10 mg only, a parameter estimate.</p>}</div>
+            <div className="fp-name"><h4>{group.title}</h4><p className="fp-formulation">{product.formulation}</p></div>
             <fieldset className="fp-product">
               <legend className="sr-only">{group.title} strengths</legend>
               <div className="fp-strengths">{groupStrengths(group, favorites, selection).map(strength => {
                 const checked = groupStrengthSelected(selection, group, strength);
                 return <label className={`fp-strength${checked ? ' is-selected' : ''}`} key={strength}>
-                  <input type="checkbox" aria-label={`${display.label} ${strength} ${group.defaultProduct.strengthUnit}`} checked={checked} onChange={event => toggle(group, strength, event.currentTarget.checked)}/>
+                  <input type="checkbox" aria-label={`${group.title} ${strength} ${group.defaultProduct.strengthUnit}`} checked={checked} onChange={event => toggle(group, strength, event.currentTarget.checked)}/>
                   <span>{strength} <span className="fp-unit">{group.defaultProduct.strengthUnit}</span></span>
                 </label>;
               })}<button className="fp-strength fp-custom-toggle" type="button" aria-label={`Custom strength for ${group.title}`} aria-expanded={custom === group.id} onClick={() => {

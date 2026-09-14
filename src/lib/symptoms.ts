@@ -7,9 +7,13 @@ export const SYMPTOMS = [
   { id: 'nausea', label: 'Nausea' },
   { id: 'dry-mouth', label: 'Dry mouth' },
   { id: 'sleep-trouble', label: 'Trouble sleeping' },
+  { id: 'anxiety', label: 'Anxiety' },
+  { id: 'palpitations', label: 'Palpitations' },
+  { id: 'other', label: 'Other' },
   { id: 'none', label: 'No discomfort' },
 ] as const;
 export type SymptomId = typeof SYMPTOMS[number]['id'];
+export const PRIMARY_SYMPTOM_IDS: readonly SymptomId[] = ['low-appetite', 'sleep-trouble', 'headache', 'nausea', 'anxiety', 'none'];
 export const SYMPTOM_IDS: readonly string[] = SYMPTOMS.map(item => item.id);
 export const SYMPTOM_LABELS: Readonly<Record<string, string>> = Object.fromEntries(SYMPTOMS.map(item => [item.id, item.label]));
 

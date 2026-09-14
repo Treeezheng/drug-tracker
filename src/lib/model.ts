@@ -112,26 +112,36 @@ export function concentration(dose:Dose, at:number, publishedOnly=false):ModelVa
 
 export interface ReferenceOverlayInfo {
   originalProductId:string;referenceProductId:string;referenceLabel:string;
-  sourceIds:string[];unit:'ng/mL';referenceEvidence:'B';reason:string;
+  sourceIds:string[];unit:'ng/mL';referenceEvidence:'A'|'B';referenceDoseMg:number;doseScale:number;reason:string;
 }
 /** A separately labelled source illustration, never the recorded product's concentration.
- * No manufacturer-specific equivalence or proportional dose scaling is inferred. */
+ * Dose scaling is an explicit unvalidated illustration, not clinical equivalence. */
 export function referenceForDose(dose:Dose):ReferenceOverlayInfo|null {
-  if(dose.productId!=='methylphenidate-ir'||dose.status==='skipped'||dose.assumptions?.accepted||modelInputError(dose)
+  if(!['methylphenidate-ir','ritalin','concerta'].includes(dose.productId)||dose.status==='skipped'||dose.assumptions?.accepted||modelInputError(dose)
     ||(dose.modelVersion&&dose.modelVersion!==MODEL_VERSION))return null;
-  const original=products.find(product=>product.id===dose.productId),reference=products.find(product=>product.id==='ritalin');
-  if(!original||!reference||dose.formulation!==original.formulation
-    ||positiveDecimal(dose.strength)!==10n*DECIMAL_SCALE||positiveDecimal(dose.quantity)!==DECIMAL_SCALE
-    ||!eligibleReference(dose,reference))return null;
-  return {originalProductId:dose.productId,referenceProductId:reference.id,referenceLabel:'Ritalin 10 mg',sourceIds:[...reference.sourceIds],unit:'ng/mL',referenceEvidence:'B',reason:'No direct data for this product · Ritalin 10 mg reference only'};
+  const original=products.find(product=>product.id===dose.productId),reference=products.find(product=>product.id===(dose.productId==='concerta'?'concerta':'ritalin'));
+  if(!original||!reference||modelGroup(dose).reference||dose.formulation!==original.formulation||dose.unusual
+    ||dose.unit!=='tablet'||(dose.strengthUnit!==undefined&&dose.strengthUnit!=='mg')
+    ||(dose.amountBasis!==undefined&&dose.amountBasis!=='labeled ingredient'))return null;
+  const strength=positiveDecimal(dose.strength),quantity=positiveDecimal(dose.quantity);
+  if(strength===null||quantity===null||quantity%DECIMAL_SCALE!==0n
+    ||positiveDecimal(dose.packageStrength??dose.strength)!==strength
+    ||!original.strengths.some(value=>positiveDecimal(value)===strength))return null;
+  const referenceDoseMg=reference.id==='concerta'?18:10,doseScale=Number(dose.amountMg)/referenceDoseMg;
+  const referenceLabel=reference.id==='concerta'?'Concerta 18 mg':'Ritalin 10 mg';
+  return {originalProductId:dose.productId,referenceProductId:reference.id,referenceLabel,sourceIds:[...reference.sourceIds],unit:'ng/mL',referenceEvidence:reference.id==='concerta'?'A':'B',referenceDoseMg,doseScale,
+    reason:doseScale===1?`${referenceLabel} reference simulation; no direct measurements for this product or administration.`
+      :`${referenceLabel} reference × ${doseScale} (${dose.amountMg} mg / ${referenceDoseMg} mg). Proportional scaling is unvalidated; not a measured or individual drug level.`};
 }
 export function referenceOverlay(dose:Dose,at:number,publishedOnly=true):(ReferenceOverlayInfo&{value:number|null;tail:boolean})|null {
   const reference=referenceForDose(dose);
   if(!reference)return null;
   // The synthetic reference exists only for evaluating the source curve. Never
   // persist it, return it as a dose, or include it in contributions/groupedTotals.
-  const value=concentration({...dose,productId:reference.referenceProductId},at,publishedOnly);
-  return {...reference,value:value.value,tail:value.tail};
+  const strength=String(reference.referenceDoseMg);
+  const value=concentration({...dose,productId:reference.referenceProductId,strength,packageStrength:strength,quantity:'1',amountMg:strength},at,publishedOnly);
+  const scaled=value.value===null?null:value.value*reference.doseScale;
+  return {...reference,value:scaled!==null&&Number.isFinite(scaled)?scaled:null,tail:value.tail};
 }
 export function contributions(doses:Dose[],at:number,publishedOnly=false){
   const seen=new Set<string>();

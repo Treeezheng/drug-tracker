@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { getProduct } from '../src/lib/catalog.ts';
 import { groupMedicationProducts, medicationDisplay, medicationVariantGroup } from '../src/lib/medication-display.ts';
 import { favoriteSelection, favoriteChanges } from '../src/lib/favorite-selection.ts';
 import { selectGroupStrength, groupStrengthSelected } from '../src/lib/grouped-favorite-selection.ts';
-import { newDose, selectDoseMedication } from '../src/components/DoseEditor.tsx';
+import DoseEditor, { doseStrengthChoices, newDose, selectDoseMedication } from '../src/components/DoseEditor.tsx';
 import { modelGroup } from '../src/lib/model.ts';
 
 test('corresponding brand and generic entries share a display name but distinct formulations do not', () => {
@@ -14,6 +16,27 @@ test('corresponding brand and generic entries share a display name but distinct 
     const p = getProduct(id); assert.deepEqual(medicationDisplay(p), { groupId: id, title: p.name, label: p.name });
   }
   assert.deepEqual(medicationDisplay({ id: 'unknown-old-brand', name: 'Saved historical name' }), { groupId: 'unknown-old-brand', title: 'Saved historical name', label: 'Saved historical name' });
+});
+
+test('every paired formulation has one dose entry, keeps old snapshots, and creates new generic favorites without model transfer',()=>{
+  const profile={name:'',timeZone:'UTC',timeFormat:'24h' as const,sleepEnabled:false,bedtime:'',wakeTime:'',weekendEnabled:false,weekendBedtime:'',weekendWakeTime:''};
+  for(const [brandId,genericId] of [['ritalin','methylphenidate-ir'],['focalin','dexmethylphenidate-ir'],['focalin-xr','dexmethylphenidate-er'],['adderall-ir','amphetamine-salts-ir'],['adderall-xr','amphetamine-salts-er'],['zenzedi','dextroamphetamine-ir'],['vyvanse-capsule','lisdexamfetamine-capsule'],['vyvanse-chewable','lisdexamfetamine-chewable']]){
+    const group=groupMedicationProducts([getProduct(brandId),getProduct(genericId)])[0],strength=group.defaultProduct.strengths[0];
+    const original={...newDose(brandId,strength),revision:9,manufacturer:'Preserved package label',note:'Original history'};
+    const before=structuredClone(original),favorites=[{id:`old-${brandId}`,productId:brandId,strength,packageStrength:strength,quantity:'2',revision:9},{id:`old-${genericId}`,productId:genericId,strength,packageStrength:strength,quantity:'1',revision:4}];
+    assert.deepEqual(favoriteChanges(favorites,favoriteSelection(favorites)),[]);
+    assert.deepEqual(doseStrengthChoices(original,favorites),[{productId:brandId,packageStrength:strength}]);
+    const html=renderToStaticMarkup(createElement(DoseEditor,{dose:original,index:0,profile,favorites,productIds:[brandId,genericId],onChange:()=>{throw Error('Rendering cannot migrate a record');}}));
+    const medication=html.match(/<select aria-label="Dose 1 medication"[\s\S]*?<\/select>/)![0];
+    assert.equal((medication.match(/<option/g)||[]).length,2,'One placeholder and one formulation, with no brand choice.');
+    assert.ok(medication.includes(`value="${brandId}" selected="">${group.title}</option>`));
+    assert.deepEqual(original,before);
+    const selected=selectGroupStrength(favoriteSelection([]),[],group,strength,true,()=>`new-${genericId}`),favorite=[...selected.values()][0];
+    assert.equal(favorite.productId,genericId);
+    const blank={...newDose(),productId:'',strength:'',amountMg:''};
+    const next=selectDoseMedication(blank,genericId,[favorite],'UTC');
+    assert.equal(next.productId,genericId);assert.equal(next.packageStrength,strength);assert.equal(modelGroup(next).reference,false);
+  }
 });
 
 test('grouping preserves first appearance, product objects, identities and independent model evidence', () => {
@@ -37,7 +60,7 @@ test('all eight pairs use one display group and default to an unbranded product 
   }
 });
 
-test('explicit Ritalin strength selection creates its exact favorite without rewriting Generic or transferring evidence', () => {
+test('historical brand favorites remain exact while the unified new-dose entry uses the saved formulation choice', () => {
   const group=groupMedicationProducts([getProduct('methylphenidate-ir'),getProduct('ritalin')])[0];
   const existing=[{id:'generic-saved',productId:'methylphenidate-ir',strength:'10',packageStrength:'10',quantity:'1.5',revision:4}];
   const before=structuredClone(existing),selection=favoriteSelection(existing),brand=medicationVariantGroup(group,'ritalin');
@@ -46,7 +69,7 @@ test('explicit Ritalin strength selection creates its exact favorite without rew
   assert.deepEqual(favoriteChanges(existing,next).map(change=>[change.type,change.favorite.productId]),[['save','ritalin']]);
   const all=[...next.values()],blank={...newDose(),productId:'',strength:'',packageStrength:'',amountMg:''};
   const ritalin=selectDoseMedication(blank,'ritalin',all,'UTC'),generic=selectDoseMedication(blank,'methylphenidate-ir',all,'UTC');
-  assert.equal(ritalin.productId,'ritalin');assert.equal(ritalin.amountMg,'10');assert.equal(modelGroup(ritalin).reference,true);
+  assert.equal(ritalin.productId,'methylphenidate-ir');assert.equal(ritalin.amountMg,'15');assert.equal(modelGroup(ritalin).reference,false);
   assert.equal(generic.productId,'methylphenidate-ir');assert.equal(generic.quantity,'1.5');assert.equal(generic.amountMg,'15');assert.equal(modelGroup(generic).reference,false);
   assert.deepEqual(existing,before);assert.equal(group.products.length,2);
   assert.throws(()=>medicationVariantGroup(group,'concerta'),/Choose a product/);

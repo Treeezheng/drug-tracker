@@ -111,19 +111,48 @@ test('legacy notes, malformed symptom timestamps and absence of a record are unk
 
 test('simple chips expose selection state and optional note; exact existing minute remains editable', () => {
   const html = renderToStaticMarkup(createElement(Symptoms, { checkins: [], profile, onSave: async () => {}, onRemove: async () => {} }));
-  assert.equal((html.match(/aria-pressed="false"/g) ?? []).length, 6); assert.doesNotMatch(html, /aria-pressed="true"/);
+  const primary=html.match(/aria-label="Discomfort symptoms">([\s\S]*?)<\/div>/)?.[1]||'';
+  assert.equal((primary.match(/aria-pressed="false"/g) ?? []).length, 6); assert.doesNotMatch(html, /aria-pressed="true"/);
+  assert.match(html,/<details class="symptom-more"><summary>More symptoms<\/summary>/);
+  for(const label of ['Dry mouth','Palpitations','Other'])assert.ok(html.includes(`>${label}</button>`));
   assert.match(html, /Note \(optional\)/); assert.match(html, /Save check-in/); assert.match(html, /novalidate=""/i);
   const existing = check('precise', '2026-09-13T15:03:21Z', ['headache']);
   const editing = renderToStaticMarkup(createElement(SymptomForm, { entry: existing, profile, onSave: async () => {} }));
-  assert.match(editing, /value="08:03"/); assert.equal((editing.match(/aria-pressed="true"/g) ?? []).length, 1);
+  assert.match(editing, /aria-label="Discomfort time: 08:03"/); assert.equal((editing.match(/aria-pressed="true"/g) ?? []).length, 1);
 });
 
 test('empty history avoids percentages and invalid date ranges render safely', () => {
   const props = { checkins: [], doses: [], profile, from: '2026-09-13', to: '2026-09-14' };
   const html = renderToStaticMarkup(createElement(SymptomHistory, props));
-  assert.match(html, /Missing records do not mean symptom-free/); assert.doesNotMatch(html, /0%|0 \/ 0/);
+  assert.match(html, /No check-ins in this period/); assert.doesNotMatch(html, /0%|0 \/ 0|symptom-free/);
   const invalid = renderToStaticMarkup(createElement(SymptomHistory, { ...props, from: '2026-09-16' }));
   assert.match(invalid, /valid date range/);
   const noMedication = renderToStaticMarkup(createElement(SymptomHistory, { ...props, checkins: [check('one', '2026-09-13T18:00:00Z', ['headache'])] }));
   assert.match(noMedication, /No observed days/); assert.match(noMedication, /Without a Taken record/); assert.match(noMedication, /do not show cause/);
+});
+
+test('common new tags and existing dry-mouth observations survive editing without requiring a note',()=>{
+  const existing=check('old','2026-09-13T18:00:00Z',['dry-mouth']);
+  const draft=symptomDraftFromCheckin(existing,zone);
+  for(const id of ['anxiety','palpitations','other'] as const)draft.symptoms=toggleSymptom(draft.symptoms,id);
+  const updated=makeSymptomCheckin(draft,zone,existing,Date.parse('2026-09-14T00:00:00Z'));
+  assert.deepEqual(updated.symptoms,['dry-mouth','anxiety','palpitations','other']);
+  assert.equal(updated.id,existing.id);assert.equal(updated.recordedAt,existing.recordedAt);assert.equal(updated.note,'');
+  assert.deepEqual(existing.symptoms,['dry-mouth']);
+  const html=renderToStaticMarkup(createElement(SymptomForm,{entry:existing,profile,onSave:async()=>{}}));
+  assert.match(html,/<details class="symptom-more" open="">/);assert.match(html,/aria-pressed="true"[^>]*>[\s\S]*?Dry mouth/);
+  for(const id of ['anxiety','palpitations','other'])assert.match(symptomSelectionError([id,'none']),/cannot be combined/);
+});
+
+test('History and saved check-ins retain date-only and timestamp-only legacy observations without inventing symptom days',()=>{
+  const legacy:Checkin={id:'legacy',date:'2026-09-13',focus:'3',sleepQuality:'4',note:'Original legacy note'};
+  const timestamp={id:'timestamp-only',recordedAt:'2026-09-13T18:00:00Z',timeZone:zone,note:'Timestamp-only note'} as Checkin;
+  const before=JSON.stringify([legacy,timestamp]);
+  const html=renderToStaticMarkup(createElement(SymptomHistory,{checkins:[legacy,timestamp],doses:[],profile,from:'2026-09-13',to:'2026-09-14'}));
+  assert.match(html,/2 check-ins/);assert.match(html,/Original legacy note|Timestamp-only note/);
+  assert.match(html,/2026-09-13 · time not recorded/);assert.match(html,/Focus: 3 · Sleep quality: 4/);
+  assert.doesNotMatch(html,/Same-day medication records|No discomfort ·|symptom-free/);
+  const saved=renderToStaticMarkup(createElement(Symptoms,{checkins:[legacy,timestamp],profile,onSave:async()=>{},onRemove:async()=>{}}));
+  assert.match(saved,/Saved check-ins · 2/);assert.match(saved,/Original legacy note/);
+  assert.equal(JSON.stringify([legacy,timestamp]),before);
 });

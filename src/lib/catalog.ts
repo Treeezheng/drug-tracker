@@ -61,7 +61,7 @@ function product(id:string,name:string,generic:string,formulation:string,family:
 }
 
 export const products:Product[] = [
-  product('ritalin','Ritalin IR','methylphenidate hydrochloride','Immediate-release tablet','Methylphenidate',['5','10','20'],['S2','S3'],{evidence:'B',model:'ritalin',referenceDose:10,note:'Constructed adult reference: 10 mg, Cmax 4.3 ng/mL, Tmax 2 h, half-life 3.5 h. Other amounts remain loggable and require explicit dimensionless assumptions; no individual drug levels are predicted.'}),
+  product('ritalin','Ritalin IR','methylphenidate hydrochloride','Immediate-release tablet','Methylphenidate',['5','10','20'],['S2','S3'],{evidence:'B',model:'ritalin',referenceDose:10,note:'Constructed adult reference: 10 mg, Cmax 4.3 ng/mL, Tmax 2 h, half-life 3.5 h. Other listed intact-tablet amounts may use an explicitly unvalidated proportional reference simulation; no individual drug levels are predicted.'}),
   product('methylphenidate-ir','Methylphenidate IR (generic)','methylphenidate hydrochloride','Immediate-release tablet','Methylphenidate',['5','10','20'],['S2'],{note:'Generic family entry: confirm the exact manufacturer and label. No automatic model transfer from the Ritalin reference.'}),
   product('methylin-solution','Methylin oral solution','methylphenidate hydrochloride','Immediate-release oral solution','Methylphenidate',['1','2'],['C1'],{unit:'mL',strengthUnit:'mg/mL',note:'Select the bottle concentration: 1 mg/mL (5 mg/5 mL) or 2 mg/mL (10 mg/5 mL). '+assumedNote}),
   product('methylphenidate-chewable','Methylphenidate chewable (generic)','methylphenidate hydrochloride','Immediate-release chewable tablet','Methylphenidate',['2.5','5','10'],['C2']),

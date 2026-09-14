@@ -36,8 +36,8 @@ test('Concerta formula describes only interpolation and the observed no-data bou
   assert.match(html,/No data beyond 29\.976 h/);assert.doesNotMatch(html,/tail|when enabled|extrapolat/i);
 });
 
-test('unknown products, unverified generics, custom packages and unavailable saved versions do not borrow a formula',()=>{
-  const doses=[timed('methylphenidate-ir','10'),timed('metformin-ir','500'),
+test('unknown products, custom packages and unavailable saved versions do not borrow a formula',()=>{
+  const doses=[timed('metformin-ir','500'),
     updateDose(timed('ritalin','2.5'),{quantity:'4'},zone),
     updateDose(timed('concerta','9'),{quantity:'2'},zone),
     {...timed('ritalin','10'),productId:'historical',assumptions:{...blankAssumptions(),accepted:true}},
@@ -45,6 +45,16 @@ test('unknown products, unverified generics, custom packages and unavailable sav
   for(const dose of doses){const formula=describeDoseFormula(dose);assert.equal(formula.kind,'unavailable');assert.deepEqual(formula.equations,[]);assert.equal(concentration(dose,at(dose,2)).value,null);}
   assert.match(describeDoseFormula(doses[0]).note,/No verified formula is implemented/);
   assert.match(describeDoseFormula(doses.at(-1)!).note,/saved model version/);
+});
+
+test('the separate reference formula explicitly explains dose scaling without claiming direct concentration data',()=>{
+  for(const [id,strength] of [['methylphenidate-ir','5'],['methylphenidate-ir','10'],['methylphenidate-ir','20'],['concerta','36']]){
+    const dose=timed(id,strength),formula=describeDoseFormula(dose);
+    assert.equal(formula.kind,'reference-illustration');assert.match(formula.title,/unvalidated/);
+    assert.match(formula.equations[0],/D \/ (10|18) mg/);
+    assert.match(formula.note,/not a measured|not a.*personal concentration/);
+    assert.equal(concentration(dose,at(dose,2)).value,null);
+  }
 });
 
 test('saved accepted illustrations remain read-only and retain their relative scale through record edits',()=>{

@@ -1,12 +1,16 @@
 # Heroku 备份、日志和 NEL：官方能力与实际配置
 
-核对日期：2026-09-13。以下区分官方文档和发布负责人实际查看的 Heroku Dashboard。本文没有读取用户记录或修改平台配置。
+初次核对日期：2026-09-13；实际备份配置更新：2026-09-14。以下区分官方文档和发布负责人在 Heroku Dashboard、官方 CLI 中实际完成的核对与配置。此次文档更新没有读取用户记录、下载生产数据库或执行恢复。
 
 ## 账户实际查看范围
 
-发布负责人当日从 Dashboard 核对：Resources 为 **Basic dyno + Heroku Postgres Essential 0**；数据库 **PostgreSQL 18.3，Available**，Rollback unsupported。Durability 页面将 Continuous Protection / Postgres Rollbacks 标为 Essential 上 Not Available，另有 Manual Backups & Data Exports 和 Create Manual Backup 按钮，列表未显示现有条目。
+发布负责人于 9 月 13 日从 Dashboard 核对：Resources 为 **Basic dyno + Heroku Postgres Essential 0**；数据库 **PostgreSQL 18.3，Available**，Rollback unsupported。Durability 页面将 Continuous Protection / Postgres Rollbacks 标为 Essential 上 Not Available，并提供 Manual Backups & Data Exports。初次查看时列表没有备份条目；之后已实际完成以下操作：
 
-这些是有限的 UI 观察：**不能证明完全没有平台内部物理备份，也不能证明没有计划排程**，页面没有提供所有日志/备份的统一最长保留期限。本轮未调用未登录的 CLI、未付费升级、未新建生产备份、未读取或恢复个人记录。region、generation、drains 和排程未在此次 UI 核对中得到完整证明。
+- **手动备份 b1：**2026 年 9 月 13 日 23:55（America/Los_Angeles）创建成功，Dashboard 显示完成，大小 **17.1 KB**。未下载或读取备份内容。
+- **每日备份计划：**2026 年 9 月 14 日，发布负责人通过官方 CLI 的浏览器授权登录后，为 `drug-tracker` 的 `DATABASE_URL` attachment 设置 **每天 02:00 America/Los_Angeles** 备份；`pg:backups:schedule` 返回 `done`。随后 `pg:backups:schedules` 实际返回 `DATABASE_URL: daily at 2:00 America/Los_Angeles`，确认排程已生效。**尚待首次定时运行**；已配置排程不是每日备份均已成功执行的证明。
+- **费用：**当前配置仍为 Basic **$7/月**加 Essential 0 **$5/月**，合计约 **$12/月**。本次没有升级套餐或开通额外收费服务；用户授权的额外备份预算为每月不超过 $20，该授权本身不表示已产生费用。
+
+以上备份均由 **Heroku** 提供，尚未配置另一独立供应商的异地备份，也**尚未进行恢复演练**。已创建备份和排程不能证明备份可成功恢复；恢复能力需单独在隔离环境中验证。region、generation、drains 未在此次核对中得到完整证明；也没有取得所有平台内部日志和备份统一最长保留期限的证明。
 
 ## 官方能力
 
@@ -24,4 +28,4 @@
 
 Router 日志可含路径、query、来源地址及响应信息；官方提供 `http-router-no-log-query` flag 以隐藏 query。[Router log redaction](https://devcenter.heroku.com/articles/http-routing#query-string-redaction) 是否启用以实际查询为准。药物、密码或恢复密钥不应进入 URL。
 
-仍待运营者确定：托管账户的实际备份/告警排程、平台内部 NEL/安全日志最长留存、物理备份到期安排和恢复演练。未取得提供商证明前，对外保留“没有核验全部提供商副本的统一最长保留期限”；不编造“已自动监控”“每天均已成功备份”或固定彻底擦除期限。未来如查询 CLI，必须使用已授权的实际账户，只记录脱敏摘要；本文件中的核对方法不表示已经执行。
+仍待运营者完成或确定：核对每日计划的实际执行结果、备份失败告警、独立供应商备份方案、平台内部 NEL/安全日志最长留存、物理备份到期安排和恢复演练。未取得提供商证明前，对外保留“没有核验全部提供商副本的统一最长保留期限”；不编造“已自动监控”“每天均已成功备份”或固定彻底擦除期限。后续 CLI 查询应继续使用已授权的实际账户，只记录脱敏摘要；上文未列为已执行的核对方法仍是待办事项。

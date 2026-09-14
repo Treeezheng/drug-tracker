@@ -31,3 +31,10 @@
 .discomfort-disclosure[open]>summary{margin:0;border-bottom:1px solid var(--border)}
 .discomfort-disclosure>.symptom-form,.discomfort-disclosure>.symptom-records-details{margin:16px 20px}
 @media(max-width:600px){.discomfort-disclosure>summary{padding-inline:16px}.discomfort-disclosure>.symptom-form,.discomfort-disclosure>.symptom-records-details{margin-inline:16px}}
+
+.symptom-history>.symptom-comparison,.symptom-history>.symptom-records-details{margin-top:12px;padding-top:0}
+.symptom-history>.symptom-comparison>summary,.symptom-history>.symptom-records-details>summary{display:flex;align-items:center;justify-content:center;gap:8px;box-sizing:border-box;min-height:44px;padding:10px 8px;line-height:20px;text-align:center;list-style:none}
+.symptom-history>.symptom-comparison>summary::-webkit-details-marker,.symptom-history>.symptom-records-details>summary::-webkit-details-marker{display:none}
+.symptom-history>.symptom-comparison>summary::after,.symptom-history>.symptom-records-details>summary::after{content:'';flex:none;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg)}
+.symptom-history>.symptom-comparison[open]>summary::after,.symptom-history>.symptom-records-details[open]>summary::after{transform:rotate(45deg)}
+.symptom-history>.symptom-comparison>summary:focus-visible,.symptom-history>.symptom-records-details>summary:focus-visible{outline:2px solid #477baa;outline-offset:2px;border-radius:4px}

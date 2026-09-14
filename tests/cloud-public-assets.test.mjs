@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, rename, symlink, truncate } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, rename, symlink, truncate, copyFile, readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request } from 'node:http';
 import { gunzipSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 import { createCloudServer } from '../server/cloud.mjs';
+import { buildMetadata } from '../scripts/build-metadata.ts';
 
 test('production public assets are compressed/cacheable while HTML, manifests and API responses remain no-store',async t=>{
   const dir=await mkdtemp(join(tmpdir(),'drug-public-assets-')),dist=join(dir,'dist');
@@ -64,6 +67,8 @@ async function publicFixture(t,{beforeStart}={}){
   await Promise.all([
     writeFile(join(dist,'index.html'),'<meta name="drug-edition" content="cloud"><title>Original index</title>'),
     writeFile(join(dist,'privacy.html'),'<title>Original privacy</title>'),
+    writeFile(join(dist,'LICENSE'),'Original public license'),
+    writeFile(join(dist,'THIRD_PARTY_NOTICES.txt'),'Original public third-party notices'),
     writeFile(join(dist,'robots.txt'),'Original robots'),
     writeFile(join(dist,'build-info.json'),'{"original":true}'),
     writeFile(join(dist,'assets/app-AbCdEf12.js'),'export const original=true;'),
@@ -75,7 +80,7 @@ async function publicFixture(t,{beforeStart}={}){
   await beforeStart?.({dir,dist,outside});
   app=await createCloudServer({dbPath:join(dir,'test.sqlite'),distDir:dist,origin:'https://assets.test'});
   await new Promise((resolve,reject)=>{app.server.once('error',reject);app.server.listen(0,'127.0.0.1',resolve);});
-  const get=path=>new Promise((resolve,reject)=>{const req=request({host:'127.0.0.1',port:app.server.address().port,path,headers:{Host:'assets.test'}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,text:Buffer.concat(chunks).toString(),headers:res.headers}));});req.on('error',reject);req.end();});
+  const get=(path,method='GET')=>new Promise((resolve,reject)=>{const req=request({host:'127.0.0.1',port:app.server.address().port,path,method,headers:{Host:'assets.test'}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const body=Buffer.concat(chunks);resolve({status:res.statusCode,text:body.toString(),body,headers:res.headers});});});req.on('error',reject);req.end();});
   return{dir,dist,outside,app,get};
 }
 
@@ -86,12 +91,42 @@ test('public responses use startup snapshots after files and ancestor directorie
     await writeFile(join(dist,'private.txt'),'SYNTHETIC FILE NOT IN PUBLIC ALLOWLIST');
   }});
   const expected=new Map();
-  for(const path of ['/drug/','/drug/privacy.html','/robots.txt','/drug/build-info.json','/drug/assets/app-AbCdEf12.js'])expected.set(path,(await f.get(path)).text);
-  for(const name of ['index.html','privacy.html','robots.txt','build-info.json']){await rename(join(f.dist,name),join(f.dist,`${name}.old`));await symlink(join(f.outside,'secret.txt'),join(f.dist,name));}
+  for(const path of ['/drug/','/drug/privacy.html','/drug/LICENSE','/drug/THIRD_PARTY_NOTICES.txt','/robots.txt','/drug/build-info.json','/drug/assets/app-AbCdEf12.js'])expected.set(path,(await f.get(path)).text);
+  for(const name of ['index.html','privacy.html','LICENSE','THIRD_PARTY_NOTICES.txt','robots.txt','build-info.json']){await rename(join(f.dist,name),join(f.dist,`${name}.old`));await symlink(join(f.outside,'secret.txt'),join(f.dist,name));}
   await rename(join(f.dist,'assets'),join(f.dist,'old-assets'));await symlink(f.outside,join(f.dist,'assets'));
   await writeFile(join(f.dist,'new-file.json'),'{"mustNotBecomePublic":true}');
   for(const[path,text]of expected){const response=await f.get(path);assert.equal(response.status,200);assert.equal(response.text,text);assert.doesNotMatch(response.text,/PRIVATE CONTENT/);}
   for(const path of ['/drug/private.txt','/drug/new-file.json','/drug/assets/linked-file.js','/drug/assets/linked-directory/app-AbCdEf12.js','/drug/assets/../private.txt','/drug/assets/%2e%2e%2fprivate.txt','/drug/%2fprivate.txt'])assert.equal((await f.get(path)).status,404);
+});
+
+test('every current public build file is served byte-for-byte as declared by the generated release manifest',async t=>{
+  const root=fileURLToPath(new URL('../',import.meta.url));
+  const f=await publicFixture(t,{beforeStart:async({dist})=>{
+    // Use the real public inputs and manifest generator, so adding an unserved
+    // root file to a future release fails this HTTP contract test.
+    for(const entry of await readdir(join(root,'public'),{withFileTypes:true})){
+      assert.equal(entry.isFile(),true,'Public build inputs must remain explicit regular files.');
+      await copyFile(join(root,'public',entry.name),join(dist,entry.name));
+    }
+    const metadata=buildMetadata('cloud');
+    metadata.configResolved({root,build:{outDir:dist}});metadata.writeBundle();
+  }});
+  const manifest=JSON.parse((await f.get('/drug/build-info.json')).text);
+  for(const name of ['LICENSE','THIRD_PARTY_NOTICES.txt'])assert.ok(Object.hasOwn(manifest.files,name));
+  for(const [name,expected] of Object.entries(manifest.files)){
+    const response=await f.get(`/drug/${name}`);
+    assert.equal(response.status,200,name);
+    assert.equal(response.body.length,expected.bytes,name);
+    assert.equal(createHash('sha256').update(response.body).digest('hex'),expected.sha256,name);
+  }
+  for(const name of ['LICENSE','THIRD_PARTY_NOTICES.txt']){
+    const response=await f.get(`/drug/${name}`);
+    assert.match(response.headers['content-type'],/^text\/plain; charset=utf-8$/);
+    assert.equal(response.headers['cache-control'],'no-store');
+    assert.equal(response.headers['x-content-type-options'],'nosniff');
+    const head=await f.get(`/drug/${name}`,'HEAD');
+    assert.equal(head.body.length,0);assert.equal(Number(head.headers['content-length']),manifest.files[name].bytes);
+  }
 });
 
 test('an asset pathname replaced after open cannot change the descriptor that is checked and captured',async t=>{
