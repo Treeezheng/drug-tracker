@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { argon2Sync } from 'node:crypto';
 import type { AppData } from '../src/lib/types.ts';
-import { createVaultKey, decryptVault, encryptVault, exportRecoveryKey, importRecoveryKey, unwrapVaultKey, wrapVaultKey, VAULT_DECRYPTION_ERROR, VAULT_MAX_PLAINTEXT_BYTES, VAULT_PBKDF2_ITERATIONS, VaultDecryptionError } from '../src/lib/vault-crypto.ts';
+import { assessVaultPassphrase, createVaultKey, decryptVault, encryptVault, exportRecoveryKey, importRecoveryKey, passwordMatchesWrappedKey, unwrapVaultKey, wrapVaultKey, VAULT_DECRYPTION_ERROR, VAULT_MAX_PLAINTEXT_BYTES, VAULT_PBKDF2_ITERATIONS, VaultDecryptionError } from '../src/lib/vault-crypto.ts';
 import type { VaultDataEnvelope } from '../src/lib/vault-crypto.ts';
 
 const ownerA = 'synthetic-owner-a', ownerB = 'synthetic-owner-b';
@@ -74,12 +75,24 @@ test('envelope version, exact fields, algorithms, lengths and canonical encoding
 test('a separate passphrase wraps the same random key with fresh salt and nonce on every wrap', async () => {
   const key = await createVaultKey(), recovery = await exportRecoveryKey(key);
   const first = await wrapVaultKey(key, passphrase, ownerA), second = await wrapVaultKey(key, passphrase, ownerA);
-  assert.equal(first.kdf.name, 'PBKDF2'); assert.equal(first.kdf.hash, 'SHA-256'); assert.equal(first.kdf.iterations, VAULT_PBKDF2_ITERATIONS);
+  assert.equal(first.version, 2); assert.deepEqual({ ...first.kdf, salt: undefined }, { name: 'Argon2id', version: 19, memoryKiB: 65536, iterations: 3, parallelism: 1, salt: undefined });
   assert.equal(decode(first.kdf.salt).length, 16); assert.equal(decode(first.iv).length, 12); assert.equal(decode(first.ciphertext).length, 48);
   assert.notEqual(first.kdf.salt, second.kdf.salt); assert.notEqual(first.iv, second.iv); assert.notEqual(first.ciphertext, second.ciphertext);
   assert.doesNotMatch(JSON.stringify(first), new RegExp(passphrase)); assert.ok(!JSON.stringify(first).includes(recovery));
   assert.equal(await exportRecoveryKey(await unwrapVaultKey(first, passphrase, ownerA)), recovery);
   assert.equal(await exportRecoveryKey(await unwrapVaultKey(second, passphrase, ownerA)), recovery);
+});
+
+test('new Argon2id wrapping interoperates with independent native Node derivation and exact v2 AAD', async () => {
+  const key=await createVaultKey(),wrapped=await wrapVaultKey(key,passphrase,ownerA);
+  assert.equal(wrapped.version,2);
+  // Independent OpenSSL/Node implementation, not hash-wasm unwrapping itself.
+  const raw=argon2Sync('argon2id',{message:Buffer.from(passphrase,'utf8'),nonce:decode(wrapped.kdf.salt),memory:65536,passes:3,parallelism:1,tagLength:32});
+  try {
+    const kek=await crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['unwrapKey']);
+    const restored=await crypto.subtle.unwrapKey('raw',decode(wrapped.ciphertext),kek,{name:'AES-GCM',iv:decode(wrapped.iv),tagLength:128,additionalData:new TextEncoder().encode(JSON.stringify(['dose-timeline-vault',2,'wrapped-key','AES-256-GCM',ownerA,'Argon2id',19,65536,3,1,wrapped.kdf.salt]))},{name:'AES-GCM'},true,['encrypt','decrypt']);
+    assert.equal(await exportRecoveryKey(restored),await exportRecoveryKey(key));
+  } finally {raw.fill(0);}
 });
 
 test('wrong passphrase, owner, wrapping metadata and wrap/data substitution cannot unlock a key', async () => {
@@ -100,6 +113,31 @@ test('KDF work limits reject downgrade, CPU-exhaustion, different algorithms and
   await rejected(unwrapVaultKey({ ...value, ciphertext: 'A'.repeat(63) }, passphrase, ownerA));
   await rejected(unwrapVaultKey({ ...value, ciphertext: 'A'.repeat(65) }, passphrase, ownerA));
   await rejected(unwrapVaultKey({ ...value, recoveryKey: await exportRecoveryKey(key) }, passphrase, ownerA));
+  for (const patch of [{memoryKiB:8192},{memoryKiB:2147483647},{parallelism:2},{iterations:1},{version:16},{version:'19'}]) await rejected(unwrapVaultKey({...value,kdf:{...value.kdf,...patch}},passphrase,ownerA));
+  await rejected(unwrapVaultKey({...value,version:1},passphrase,ownerA));
+});
+
+test('a legacy PBKDF2 vault remains unlockable even when its password fails the new strength policy', async () => {
+  const weak = 'password1234', key = await createVaultKey(), salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const kdf = { name: 'PBKDF2', hash: 'SHA-256', iterations: VAULT_PBKDF2_ITERATIONS, salt: encode(salt) };
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(weak), {name:'PBKDF2'}, false, ['deriveKey']);
+  const kek = await crypto.subtle.deriveKey({name:'PBKDF2',hash:'SHA-256',salt,iterations:kdf.iterations},material,{name:'AES-GCM',length:256},false,['wrapKey']);
+  const ciphertext = await crypto.subtle.wrapKey('raw',key,kek,{name:'AES-GCM',iv,tagLength:128,additionalData:new TextEncoder().encode(JSON.stringify(['dose-timeline-vault',1,'wrapped-key','AES-256-GCM',ownerA,'PBKDF2','SHA-256',kdf.iterations,kdf.salt]))});
+  const legacy = {protocol:'dose-timeline-vault',version:1,kind:'wrapped-key',cipher:'AES-256-GCM',ownerId:ownerA,iv:encode(iv),ciphertext:encode(new Uint8Array(ciphertext)),kdf};
+  assert.equal(await exportRecoveryKey(await unwrapVaultKey(legacy,weak,ownerA)),await exportRecoveryKey(key));
+  assert.equal((await assessVaultPassphrase(weak)).acceptable,false);
+  await assert.rejects(wrapVaultKey(key,weak,ownerA),/stronger/);
+  for (const iterations of [599999,2000001]) await rejected(unwrapVaultKey({...legacy,kdf:{...kdf,iterations}},weak,ownerA));
+});
+
+test('password-strength policy rejects common or repeated passwords and matching check never transmits a candidate', async () => {
+  for (const value of ['password1234','aaaaaaaaaaaaaaaaaaaa','Password123456!','qwertyuiop123456']) assert.equal((await assessVaultPassphrase(value)).acceptable,false);
+  const key=await createVaultKey(),value=await wrapVaultKey(key,passphrase,ownerA);
+  assert.equal(await passwordMatchesWrappedKey(value,passphrase,ownerA),true);
+  assert.equal(await passwordMatchesWrappedKey(value,'Another independent synthetic phrase!',ownerA),false);
+  await assert.rejects(passwordMatchesWrappedKey({...value,kdf:{...value.kdf,memoryKiB:1}},passphrase,ownerA));
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(wrapVaultKey(key,passphrase,ownerA,controller.signal), error=>error instanceof DOMException&&error.name==='AbortError');
 });
 
 test('recovery input rejects padding, whitespace, noncanonical pad bits and wrong lengths', async () => {

@@ -43,13 +43,23 @@ function binary(value, minimum, maximum) {
 function envelope(value, expectedOwner, kind) {
   exactObject(value, [...COMMON_FIELDS, ...(kind === 'wrapped-key' ? ['kdf'] : [])]);
   if (value.ownerId !== expectedOwner) throw new VaultStoreError(403, 'The encrypted envelope does not belong to the selected owner.');
-  if (value.protocol !== PROTOCOL || value.version !== 1 || value.kind !== kind || value.cipher !== 'AES-256-GCM') invalid('Unsupported encrypted envelope version or cipher.');
+  const supportedVersion = kind === 'data' ? value.version === 1 : value.version === 1 || value.version === 2 || value.version === 3;
+  if (value.protocol !== PROTOCOL || !supportedVersion || value.kind !== kind || value.cipher !== 'AES-256-GCM') invalid('Unsupported encrypted envelope version or cipher.');
   binary(value.iv, 12, 12);
   binary(value.ciphertext, kind === 'wrapped-key' ? 48 : 17, kind === 'wrapped-key' ? 48 : MAX_DATA_BYTES);
   if (kind === 'wrapped-key') {
-    const kdf = exactObject(value.kdf, ['name', 'hash', 'iterations', 'salt']);
-    if (kdf.name !== 'PBKDF2' || kdf.hash !== 'SHA-256' || !Number.isSafeInteger(kdf.iterations)
-      || kdf.iterations < 600_000 || kdf.iterations > 2_000_000) invalid('Unsupported key derivation settings.');
+    const kdf = value.version === 1
+      ? exactObject(value.kdf, ['name', 'hash', 'iterations', 'salt'])
+      : value.version === 2 ? exactObject(value.kdf, ['name', 'version', 'memoryKiB', 'iterations', 'parallelism', 'salt'])
+      : exactObject(value.kdf, ['name', 'hash', 'context', 'salt']);
+    if (value.version === 1) {
+      if (kdf.name !== 'PBKDF2' || kdf.hash !== 'SHA-256' || !Number.isSafeInteger(kdf.iterations)
+        || kdf.iterations < 600_000 || kdf.iterations > 2_000_000) invalid('Unsupported key derivation settings.');
+    } else if (value.version === 2 && (kdf.name !== 'Argon2id' || kdf.version !== 19 || kdf.memoryKiB !== 65_536 || kdf.iterations !== 3 || kdf.parallelism !== 1)) {
+      // Version 2 has one fixed resource profile; untrusted envelopes cannot request arbitrary work.
+      invalid('Unsupported key derivation settings.');
+    }
+    if (value.version === 3 && (kdf.name !== 'OPAQUE-export' || kdf.hash !== 'SHA-256' || kdf.context !== 'drug-tracker:opaque:v1')) invalid('Unsupported export-key wrapping settings.');
     binary(kdf.salt, 16, 16);
   }
   return JSON.stringify(value);

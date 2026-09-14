@@ -1,0 +1,12 @@
+# Drug Tracker
+
+> Personal medication tracking and simulations. Results are not medical advice or measured drug levels.
+
+## Public information
+
+- [Simulator](https://treeezh.com/drug/)
+- [Privacy and encryption limits](https://treeezh.com/drug/privacy.html)
+- [Terms of use](https://treeezh.com/drug/terms.html)
+- [Source and security information](https://github.com/Treeezheng/drug-tracker)
+
+Account records and authentication endpoints are private. This file does not grant access to them or authorize sharing any user data.

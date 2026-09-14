@@ -1,8 +1,11 @@
 import type { AppData } from './types';
+import { vaultPasswordError } from './password-policy.mjs';
+export { assessVaultPassphrase } from './password-policy.mjs';
 
 /** Standalone client primitives only. This module does not use auth, network or storage APIs. */
 export const VAULT_PROTOCOL = 'dose-timeline-vault' as const;
 export const VAULT_VERSION = 1 as const;
+export const VAULT_KEY_VERSION = 2 as const;
 export const VAULT_PBKDF2_ITERATIONS = 600_000;
 export const VAULT_MAX_PBKDF2_ITERATIONS = 2_000_000;
 export const VAULT_MAX_PLAINTEXT_BYTES = 16_000_000;
@@ -21,10 +24,12 @@ export interface VaultDataEnvelope {
   /** Ciphertext includes the 128-bit GCM authentication tag. */
   ciphertext: string;
 }
-export interface VaultKeyEnvelope extends Omit<VaultDataEnvelope, 'kind'> {
-  kind: 'wrapped-key';
-  kdf: { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number; salt: string };
-}
+export interface Pbkdf2Settings { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number; salt: string; }
+export interface Argon2Settings { name: 'Argon2id'; version: 19; memoryKiB: 65536; iterations: 3; parallelism: 1; salt: string; }
+export interface OpaqueSettings { name: 'OPAQUE-export'; hash: 'SHA-256'; context: 'drug-tracker:opaque:v1'; salt: string; }
+export type VaultKeyEnvelope = Omit<VaultDataEnvelope, 'kind' | 'version'> & { kind: 'wrapped-key' } & (
+  { version: 1; kdf: Pbkdf2Settings } | { version: 2; kdf: Argon2Settings } | { version: 3; kdf: OpaqueSettings }
+);
 
 export class VaultDecryptionError extends Error {
   constructor() { super(VAULT_DECRYPTION_ERROR); this.name = 'VaultDecryptionError'; }
@@ -69,8 +74,8 @@ function assertVaultKey(key: CryptoKey): void {
 }
 function aad(kind: 'data' | 'wrapped-key', ownerId: string, kdf?: VaultKeyEnvelope['kdf']): Uint8Array<ArrayBuffer> {
   // An ordered tuple avoids ambiguous concatenation and separates data from key-wrapping.
-  return encoder.encode(JSON.stringify([VAULT_PROTOCOL, VAULT_VERSION, kind, CIPHER, ownerId,
-    ...(kdf ? [kdf.name, kdf.hash, kdf.iterations, kdf.salt] : [])]));
+  return encoder.encode(JSON.stringify([VAULT_PROTOCOL, kdf?.name === 'OPAQUE-export' ? 3 : kdf?.name === 'Argon2id' ? VAULT_KEY_VERSION : VAULT_VERSION, kind, CIPHER, ownerId,
+    ...(kdf?.name === 'OPAQUE-export' ? [kdf.name, kdf.hash, kdf.context, kdf.salt] : kdf?.name === 'Argon2id' ? [kdf.name, kdf.version, kdf.memoryKiB, kdf.iterations, kdf.parallelism, kdf.salt] : kdf ? [kdf.name, kdf.hash, kdf.iterations, kdf.salt] : [])]));
 }
 
 function readEnvelope(input: unknown, expectedOwnerId: string, kind: 'data'): VaultDataEnvelope;
@@ -79,14 +84,22 @@ function readEnvelope(input: unknown, expectedOwnerId: string, kind: 'data' | 'w
   owner(expectedOwnerId);
   const value = plainObject(input);
   exactKeys(value, ['protocol', 'version', 'kind', 'ownerId', 'cipher', 'iv', 'ciphertext', ...(kind === 'wrapped-key' ? ['kdf'] : [])]);
-  if (value.protocol !== VAULT_PROTOCOL || value.version !== VAULT_VERSION || value.kind !== kind || value.cipher !== CIPHER || value.ownerId !== expectedOwnerId) throw new Error('Unsupported envelope.');
+  if (value.protocol !== VAULT_PROTOCOL || !(value.version === 1 || (kind === 'wrapped-key' && (value.version === 2 || value.version === 3))) || value.kind !== kind || value.cipher !== CIPHER || value.ownerId !== expectedOwnerId) throw new Error('Unsupported envelope.');
   readBase64url(value.iv, 12, 12);
   readBase64url(value.ciphertext, kind === 'wrapped-key' ? 48 : 17, kind === 'wrapped-key' ? 48 : VAULT_MAX_PLAINTEXT_BYTES + 16);
   if (kind === 'wrapped-key') {
     const kdf = plainObject(value.kdf);
-    exactKeys(kdf, ['name', 'hash', 'iterations', 'salt']);
-    if (kdf.name !== 'PBKDF2' || kdf.hash !== 'SHA-256' || !Number.isSafeInteger(kdf.iterations)
-      || Number(kdf.iterations) < VAULT_PBKDF2_ITERATIONS || Number(kdf.iterations) > VAULT_MAX_PBKDF2_ITERATIONS) throw new Error('Unsupported key derivation.');
+    if (value.version === 1) {
+      exactKeys(kdf, ['name', 'hash', 'iterations', 'salt']);
+      if (kdf.name !== 'PBKDF2' || kdf.hash !== 'SHA-256' || !Number.isSafeInteger(kdf.iterations)
+        || Number(kdf.iterations) < VAULT_PBKDF2_ITERATIONS || Number(kdf.iterations) > VAULT_MAX_PBKDF2_ITERATIONS) throw new Error('Unsupported key derivation.');
+    } else if (value.version === 2) {
+      exactKeys(kdf, ['name', 'version', 'memoryKiB', 'iterations', 'parallelism', 'salt']);
+      if (kdf.name !== 'Argon2id' || kdf.version !== 19 || kdf.memoryKiB !== 65536 || kdf.iterations !== 3 || kdf.parallelism !== 1) throw new Error('Unsupported key derivation.');
+    } else {
+      exactKeys(kdf, ['name', 'hash', 'context', 'salt']);
+      if (kdf.name !== 'OPAQUE-export' || kdf.hash !== 'SHA-256' || kdf.context !== 'drug-tracker:opaque:v1') throw new Error('Unsupported key derivation.');
+    }
     readBase64url(kdf.salt, 16, 16);
   }
   // Snapshot accepted public fields before any asynchronous crypto work.
@@ -196,6 +209,53 @@ export async function importRecoveryKey(recoveryKey: string): Promise<CryptoKey>
   finally { raw?.fill(0); }
 }
 
+/** Only OPAQUE's client-only export key is accepted. Its shared session key is never used here. */
+async function opaqueWrappingKey(exportKey: string, kdf: OpaqueSettings, ownerId: string): Promise<CryptoKey> {
+  const raw = readBase64url(exportKey, 64, 64);
+  try {
+    const material = await webCrypto().subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
+    const info = encoder.encode(JSON.stringify([VAULT_PROTOCOL, 3, 'opaque-export-wrap', CIPHER, ownerId, kdf.context]));
+    return await webCrypto().subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: readBase64url(kdf.salt, 16, 16), info }, material, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']);
+  } finally { raw.fill(0); }
+}
+export async function wrapVaultKeyOpaque(key: CryptoKey, exportKey: string, ownerId: string): Promise<VaultKeyEnvelope> {
+  owner(ownerId); assertVaultKey(key);
+  const kdf: OpaqueSettings = { name: 'OPAQUE-export', hash: 'SHA-256', context: 'drug-tracker:opaque:v1', salt: base64url(webCrypto().getRandomValues(new Uint8Array(16))) };
+  const kek = await opaqueWrappingKey(exportKey, kdf, ownerId), iv = webCrypto().getRandomValues(new Uint8Array(12));
+  const wrapped = await webCrypto().subtle.wrapKey('raw', key, kek, { name: 'AES-GCM', iv, additionalData: aad('wrapped-key', ownerId, kdf), tagLength: 128 });
+  return { protocol: VAULT_PROTOCOL, version: 3, kind: 'wrapped-key', ownerId, cipher: CIPHER, iv: base64url(iv), ciphertext: base64url(new Uint8Array(wrapped)), kdf };
+}
+export async function unwrapVaultKeyOpaque(envelope: unknown, exportKey: string, expectedOwnerId: string): Promise<CryptoKey> {
+  try {
+    const value = readEnvelope(envelope, expectedOwnerId, 'wrapped-key');
+    if (value.kdf.name !== 'OPAQUE-export') throw new Error('OPAQUE key wrapping required.');
+    const kek = await opaqueWrappingKey(exportKey, value.kdf, expectedOwnerId);
+    return await webCrypto().subtle.unwrapKey('raw', readBase64url(value.ciphertext, 48, 48), kek,
+      { name: 'AES-GCM', iv: readBase64url(value.iv, 12, 12), additionalData: aad('wrapped-key', expectedOwnerId, value.kdf), tagLength: 128 },
+      { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+  } catch { throw new VaultDecryptionError(); }
+}
+
+/** The versioned code contains two independent secrets. Only authToken may leave the client. */
+export async function createSecureRecoveryKey(key: CryptoKey, ownerId: string): Promise<{ recoveryKey: string; recoveryAuthHash: string }> {
+  owner(ownerId); assertVaultKey(key);
+  const token = webCrypto().getRandomValues(new Uint8Array(32));
+  try {
+    const auth = base64url(token), dek = await exportRecoveryKey(key);
+    const recoveryAuthHash = Array.from(new Uint8Array(await webCrypto().subtle.digest('SHA-256', token)), byte => byte.toString(16).padStart(2, '0')).join('');
+    return { recoveryKey: `DTR1.${ownerId}.${auth}.${dek}`, recoveryAuthHash };
+  } finally { token.fill(0); }
+}
+export async function readSecureRecoveryKey(value: string): Promise<{ ownerId: string; authToken: string; key: CryptoKey }> {
+  try {
+    if (typeof value !== 'string' || value.length > 224) throw new Error('Invalid recovery code.');
+    const pieces = value.trim().split('.');
+    if (pieces.length !== 4 || pieces[0] !== 'DTR1') throw new Error('Invalid recovery code.');
+    owner(pieces[1]); readBase64url(pieces[2], 32, 32).fill(0);
+    return { ownerId: pieces[1], authToken: pieces[2], key: await importRecoveryKey(pieces[3]) };
+  } catch { throw new VaultDecryptionError(); }
+}
+
 export async function encryptVault(data: AppData, key: CryptoKey, ownerId: string): Promise<VaultDataEnvelope> {
   owner(ownerId); assertVaultKey(key);
   const plaintext = encoder.encode(JSON.stringify(boundedData(data)));
@@ -219,33 +279,86 @@ export async function decryptVault(envelope: unknown, key: CryptoKey, expectedOw
   finally { plaintext?.fill(0); }
 }
 
-async function deriveWrappingKey(vaultPassphrase: string, kdf: VaultKeyEnvelope['kdf']): Promise<CryptoKey> {
+async function argon2Bytes(password: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+  signal?.throwIfAborted();
+  if (typeof window === 'undefined') {
+    const { argon2id } = await import('hash-wasm');
+    signal?.throwIfAborted();
+    return new Uint8Array(await argon2id({ password, salt, memorySize: 65536, iterations: 3, parallelism: 1, hashLength: 32, outputType: 'binary' }));
+  }
+  // Worker code and its WASM are same-origin build assets, with no CDN requests.
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./vault-kdf.worker.ts', import.meta.url), { type: 'module', name: 'drug-vault-kdf' });
+    const cleanup = () => { signal?.removeEventListener('abort', abort); worker.terminate(); };
+    const abort = () => { cleanup(); reject(new DOMException('Key derivation canceled.', 'AbortError')); };
+    worker.onerror = () => { cleanup(); reject(new Error('Key derivation failed. Use a supported browser and retry.')); };
+    worker.onmessage = (event: MessageEvent<{ result?: Uint8Array }>) => {
+      const result = event.data.result;
+      cleanup();
+      if (signal?.aborted) reject(new DOMException('Key derivation canceled.', 'AbortError'));
+      else if (result instanceof Uint8Array && result.byteLength === 32) resolve(new Uint8Array(result));
+      else reject(new Error('Key derivation failed.'));
+      result?.fill(0);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) { abort(); return; }
+    const copiedPassword = password.slice(), copiedSalt = salt.slice();
+    try { worker.postMessage({ password: copiedPassword, salt: copiedSalt }, [copiedPassword.buffer, copiedSalt.buffer]); }
+    catch (error) { copiedPassword.fill(0); copiedSalt.fill(0); cleanup(); reject(error); }
+  });
+}
+
+async function deriveWrappingKey(vaultPassphrase: string, kdf: VaultKeyEnvelope['kdf'], signal?: AbortSignal): Promise<CryptoKey> {
+  if (kdf.name === 'OPAQUE-export') throw new Error('This account requires OPAQUE authentication.');
   // Exact Unicode, no trimming or normalization; a new vault UI must request an independent secret.
   if (typeof vaultPassphrase !== 'string' || vaultPassphrase.length > 1024 || [...vaultPassphrase].length < 12) throw new Error('Use a vault passphrase of 12–1,024 characters.');
   const bytes = encoder.encode(vaultPassphrase);
   try {
     if (decoder.decode(bytes) !== vaultPassphrase) throw new Error('Use valid Unicode in the vault passphrase.');
+    signal?.throwIfAborted();
+    if (kdf.name === 'Argon2id') {
+      const raw = await argon2Bytes(bytes, readBase64url(kdf.salt, 16, 16), signal);
+      try { signal?.throwIfAborted(); return await webCrypto().subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['wrapKey', 'unwrapKey']); }
+      finally { raw.fill(0); }
+    }
     const material = await webCrypto().subtle.importKey('raw', bytes, { name: 'PBKDF2' }, false, ['deriveKey']);
     return await webCrypto().subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: readBase64url(kdf.salt, 16, 16), iterations: kdf.iterations }, material, { name: 'AES-GCM', length: 256 }, false, ['wrapKey', 'unwrapKey']);
   } finally { bytes.fill(0); }
 }
 
 /** This passphrase is client-only and must never be the authentication password. */
-export async function wrapVaultKey(key: CryptoKey, vaultPassphrase: string, ownerId: string): Promise<VaultKeyEnvelope> {
+export async function wrapVaultKey(key: CryptoKey, vaultPassphrase: string, ownerId: string, signal?: AbortSignal): Promise<VaultKeyEnvelope> {
   owner(ownerId); assertVaultKey(key);
-  const kdf: VaultKeyEnvelope['kdf'] = { name: 'PBKDF2', hash: 'SHA-256', iterations: VAULT_PBKDF2_ITERATIONS, salt: base64url(webCrypto().getRandomValues(new Uint8Array(16))) };
-  const kek = await deriveWrappingKey(vaultPassphrase, kdf);
+  const error = await vaultPasswordError(vaultPassphrase); if (error) throw new Error(error);
+  const kdf: Argon2Settings = { name: 'Argon2id', version: 19, memoryKiB: 65536, iterations: 3, parallelism: 1, salt: base64url(webCrypto().getRandomValues(new Uint8Array(16))) };
+  const kek = await deriveWrappingKey(vaultPassphrase, kdf, signal);
   const iv = webCrypto().getRandomValues(new Uint8Array(12));
   const wrapped = await webCrypto().subtle.wrapKey('raw', key, kek, { name: 'AES-GCM', iv, additionalData: aad('wrapped-key', ownerId, kdf), tagLength: 128 });
-  return { protocol: VAULT_PROTOCOL, version: VAULT_VERSION, kind: 'wrapped-key', ownerId, cipher: CIPHER, iv: base64url(iv), ciphertext: base64url(new Uint8Array(wrapped)), kdf };
+  return { protocol: VAULT_PROTOCOL, version: VAULT_KEY_VERSION, kind: 'wrapped-key', ownerId, cipher: CIPHER, iv: base64url(iv), ciphertext: base64url(new Uint8Array(wrapped)), kdf };
 }
 
-export async function unwrapVaultKey(envelope: unknown, vaultPassphrase: string, expectedOwnerId: string): Promise<CryptoKey> {
+export async function unwrapVaultKey(envelope: unknown, vaultPassphrase: string, expectedOwnerId: string, signal?: AbortSignal): Promise<CryptoKey> {
   try {
     const value = readEnvelope(envelope, expectedOwnerId, 'wrapped-key');
-    const kek = await deriveWrappingKey(vaultPassphrase, value.kdf);
+    const kek = await deriveWrappingKey(vaultPassphrase, value.kdf, signal);
     return await webCrypto().subtle.unwrapKey('raw', readBase64url(value.ciphertext, 48, 48), kek,
       { name: 'AES-GCM', iv: readBase64url(value.iv, 12, 12), additionalData: aad('wrapped-key', expectedOwnerId, value.kdf), tagLength: 128 },
       { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
   } catch { throw new VaultDecryptionError(); }
+}
+
+/** Used before transmitting a proposed ACCOUNT password. Derivation failures fail closed. */
+export async function passwordMatchesWrappedKey(envelope: unknown, candidate: string, expectedOwnerId: string, signal?: AbortSignal): Promise<boolean> {
+  const value = readEnvelope(envelope, expectedOwnerId, 'wrapped-key');
+  const kek = await deriveWrappingKey(candidate, value.kdf, signal);
+  signal?.throwIfAborted();
+  try {
+    await webCrypto().subtle.unwrapKey('raw', readBase64url(value.ciphertext, 48, 48), kek,
+      { name: 'AES-GCM', iv: readBase64url(value.iv, 12, 12), additionalData: aad('wrapped-key', expectedOwnerId, value.kdf), tagLength: 128 },
+      { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    return true;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'OperationError') return false;
+    throw error;
+  }
 }

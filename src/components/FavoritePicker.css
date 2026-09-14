@@ -11,7 +11,10 @@
 .favorite-picker .fp-name h4 { margin: 0; font-size: 14px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .favorite-picker .fp-product { grid-column: 2; }
 .favorite-picker .fp-brand { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-style: italic; line-height: 1.45; }
-.favorite-picker .fp-formulation { margin: 0 0 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.favorite-picker .fp-formulation { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.favorite-picker .fp-variant { display: block; margin-top: 5px; max-width: 220px; }
+.favorite-picker .fp-variant select { width: 100%; min-height: 44px; color: var(--muted); font-size: 13px; font-style: italic; }
+.favorite-picker .fp-model-note { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .favorite-picker .fp-strengths { display: flex; flex-wrap: wrap; gap: 8px; }
 .favorite-picker .fp-strength { display: inline-flex; align-items: center; justify-content: flex-start; gap: 7px; min-height: 44px; min-width: 76px; max-width: 100%; padding: 9px 11px; border: 1px solid #cbd2da; border-radius: 7px; background: #fff; color: var(--text); cursor: pointer; font-size: 13px; line-height: 1.3; }
 .favorite-picker .fp-strength input { width: 16px; height: 16px; min-height: 0; margin: 0; }
@@ -28,6 +31,7 @@
 .favorite-picker .fp-footer .button { min-height: 44px; }
 @media (max-width: 640px) {
   .favorite-picker .fp-search input { font-size: 16px; }
+  .favorite-picker .fp-variant select { font-size: 16px; }
   .favorite-picker .fp-hint { margin-bottom: 18px; }
   .favorite-picker .fp-product-group { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; }
   .favorite-picker .fp-name { padding-top: 0; }

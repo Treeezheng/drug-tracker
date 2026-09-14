@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getProduct } from '../src/lib/catalog.ts';
-import { groupMedicationProducts, medicationDisplay } from '../src/lib/medication-display.ts';
+import { groupMedicationProducts, medicationDisplay, medicationVariantGroup } from '../src/lib/medication-display.ts';
+import { favoriteSelection, favoriteChanges } from '../src/lib/favorite-selection.ts';
+import { selectGroupStrength, groupStrengthSelected } from '../src/lib/grouped-favorite-selection.ts';
+import { newDose, selectDoseMedication } from '../src/components/DoseEditor.tsx';
+import { modelGroup } from '../src/lib/model.ts';
 
 test('corresponding brand and generic entries share a display name but distinct formulations do not', () => {
   assert.deepEqual(medicationDisplay(getProduct('ritalin')), { groupId: 'methylphenidate-ir-display', title: 'Methylphenidate IR', variant: 'Ritalin', label: 'Methylphenidate IR · Ritalin' });
@@ -31,4 +35,19 @@ test('all eight pairs use one display group and default to an unbranded product 
     assert.equal(groups[0].defaultProduct.id, genericId); assert.ok(groups[0].brand);
     assert.equal(groups[0].defaultProduct.evidence, 'D');
   }
+});
+
+test('explicit Ritalin strength selection creates its exact favorite without rewriting Generic or transferring evidence', () => {
+  const group=groupMedicationProducts([getProduct('methylphenidate-ir'),getProduct('ritalin')])[0];
+  const existing=[{id:'generic-saved',productId:'methylphenidate-ir',strength:'10',packageStrength:'10',quantity:'1.5',revision:4}];
+  const before=structuredClone(existing),selection=favoriteSelection(existing),brand=medicationVariantGroup(group,'ritalin');
+  assert.equal(groupStrengthSelected(selection,brand,'10'),false);
+  const next=selectGroupStrength(selection,existing,brand,'10',true,()=> 'new-ritalin');
+  assert.deepEqual(favoriteChanges(existing,next).map(change=>[change.type,change.favorite.productId]),[['save','ritalin']]);
+  const all=[...next.values()],blank={...newDose(),productId:'',strength:'',packageStrength:'',amountMg:''};
+  const ritalin=selectDoseMedication(blank,'ritalin',all,'UTC'),generic=selectDoseMedication(blank,'methylphenidate-ir',all,'UTC');
+  assert.equal(ritalin.productId,'ritalin');assert.equal(ritalin.amountMg,'10');assert.equal(modelGroup(ritalin).reference,true);
+  assert.equal(generic.productId,'methylphenidate-ir');assert.equal(generic.quantity,'1.5');assert.equal(generic.amountMg,'15');assert.equal(modelGroup(generic).reference,false);
+  assert.deepEqual(existing,before);assert.equal(group.products.length,2);
+  assert.throws(()=>medicationVariantGroup(group,'concerta'),/Choose a product/);
 });

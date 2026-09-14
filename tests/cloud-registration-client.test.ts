@@ -68,8 +68,8 @@ function cookieServer(heldPath:string){
     calls.push(path);
     if(path===heldPath&&calls.filter(item=>item===path).length===1){started();await gate;}
     if(path==='/auth/register'||path==='/auth/login')cookie=body.username;
-    if(path==='/auth/logout')cookie='';
-    const value=path==='/auth/logout'?{ok:true}:{user:cookie?{id:cookie,name:cookie}:null};
+    if(path==='/auth/logout'||path==='/auth/logout-all'||path==='/account')cookie='';
+    const value=path==='/auth/logout'||path==='/auth/logout-all'||path==='/account'?{ok:true}:{user:cookie?{id:cookie,name:cookie}:null};
     return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
   }) as typeof fetch;
   return {fetcher,calls,began,release:()=>release(),get cookie(){return cookie;}};
@@ -96,4 +96,26 @@ test('session discovery waits for an earlier pending registration response',asyn
   const registering=client.register('new-owner','account password');await remote.began;
   const session=client.session();await Promise.resolve();assert.deepEqual(remote.calls,['/auth/register']);
   remote.release();await registering;assert.equal((await session)?.id,'new-owner');assert.deepEqual(remote.calls,['/auth/register','/session']);
+});
+
+test('a delayed account deletion clears its old cookie before a new login and cannot clear the newer account',async()=>{
+  const remote=cookieServer('/account'),client=createCloudClient({fetch:remote.fetcher});await client.session();
+  const deleting=client.deleteAccount('account password'),canceled=assert.rejects(deleting,error=>error instanceof ApiError&&error.status===401);
+  await remote.began;
+  const login=client.login('different-owner','another password');await Promise.resolve();
+  assert.deepEqual(remote.calls,['/session','/account']);
+  remote.release();await canceled;await login;
+  assert.equal(remote.cookie,'different-owner');assert.equal(client.getState().user?.id,'different-owner');
+  assert.deepEqual(remote.calls,['/session','/account','/auth/login']);
+});
+
+test('all-session logout retains the cookie-changing queue after cancellation, so a late response cannot clear a newer login',async()=>{
+  const remote=cookieServer('/auth/logout-all'),client=createCloudClient({fetch:remote.fetcher});await client.session();
+  const logout=client.logoutAll('account password'),canceled=assert.rejects(logout,error=>error instanceof ApiError&&error.status===401);
+  await remote.began;
+  const login=client.login('different-owner','another password');await Promise.resolve();
+  assert.deepEqual(remote.calls,['/session','/auth/logout-all']);
+  remote.release();await canceled;await login;
+  assert.equal(remote.cookie,'different-owner');assert.equal(client.getState().user?.id,'different-owner');
+  assert.deepEqual(remote.calls,['/session','/auth/logout-all','/auth/login']);
 });

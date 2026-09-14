@@ -1,5 +1,18 @@
-.guest-storage-note{color:var(--muted);font-size:13px;line-height:1.5;margin:-9px 0 22px}
+.guest-shell .responsive-page-title{margin-bottom:12px}
+.guest-storage-note{color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 20px}
 .guest-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:18px 0;color:var(--muted);font-size:13px}
 .guest-bottom .text-button{min-height:44px}.guest-bottom>span{line-height:1.5}
 .guest-preferences>.settings-grid{margin:18px 0}.guest-preferences>.check-line{margin:18px 0}
-@media(max-width:700px){.guest-shell .account-control{gap:8px;flex-wrap:wrap}.guest-shell .account-control>.text-button{min-height:44px}.guest-storage-note{font-size:13px}.guest-bottom{align-items:flex-start;flex-direction:column}.guest-preferences input,.guest-preferences select{font-size:16px}}
+.guest-dose-heading{flex-wrap:wrap;gap:8px 16px}
+.guest-dose-heading-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px 16px;margin-left:auto}
+.guest-store-hint{color:var(--muted);font-size:12px;font-style:italic;white-space:nowrap}
+.guest-store-hint .text-button{font:inherit;min-height:44px;text-decoration:underline;text-underline-offset:3px}
+.guest-submitted-row{display:flex;align-items:center;gap:12px 20px;flex-wrap:wrap;border-top:1px solid var(--border);padding:16px 24px}
+.guest-dose-time{font-size:14px;min-width:145px}
+.guest-dose-time small,.guest-dose-product>small{display:block;margin-top:3px;color:var(--muted);font-size:12px;line-height:1.5}
+.guest-dose-product{flex:1;min-width:150px;overflow-wrap:anywhere}
+.guest-dose-product strong{font-weight:500}
+.guest-dose-actions{display:flex;align-items:center;gap:4px;margin-left:auto}
+.guest-dose-actions .text-button,.guest-dose-actions .icon-button{min-width:44px;min-height:44px}
+@media(max-width:700px){.guest-dose-heading-actions{gap:0 12px}.guest-submitted-row{padding:14px 16px;gap:8px 12px}.guest-dose-time{min-width:125px}.guest-dose-product{min-width:135px}}
+@media(max-width:700px){.guest-shell .account-control{gap:8px;flex-wrap:wrap}.guest-shell .account-control>.text-button{min-height:44px}.guest-shell .responsive-page-title{margin-bottom:0}.guest-storage-note{font-size:13px;margin-bottom:16px}.guest-bottom{align-items:flex-start;flex-direction:column}.guest-preferences input,.guest-preferences select{font-size:16px}}

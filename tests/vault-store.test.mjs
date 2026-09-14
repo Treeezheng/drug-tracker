@@ -238,3 +238,44 @@ test('owner selection and plain envelopes are mandatory, getters never run, and 
     assert.throws(operation, status(503));
   }
 });
+
+test('Argon2id v2 wrapped keys accept one fixed resource profile beside v1 data; malformed parameters leave both saved envelopes intact', async t => {
+  const {open}=await fixture(t),store=open();
+  const initial=store.write(OWNER_A,opaqueInput());
+  const input=opaqueInput(OWNER_A,1);
+  input.keyEnvelope={...input.keyEnvelope,version:2,kdf:{name:'Argon2id',version:19,memoryKiB:65536,iterations:3,parallelism:1,salt:b64(16)}};
+  input.dataEnvelope.ciphertext=b64(33);
+  const saved=store.write(OWNER_A,input);
+  assert.equal(saved.revision,2);assert.equal(saved.dataEnvelope.version,1);assert.equal(saved.keyEnvelope.version,2);
+  for(const kdf of [
+    {...input.keyEnvelope.kdf,memoryKiB:65535},{...input.keyEnvelope.kdf,memoryKiB:2**30},
+    {...input.keyEnvelope.kdf,iterations:1},{...input.keyEnvelope.kdf,iterations:4},
+    {...input.keyEnvelope.kdf,parallelism:2},{...input.keyEnvelope.kdf,version:16},
+    {...input.keyEnvelope.kdf,name:'Argon2i'},{...input.keyEnvelope.kdf,hash:'SHA-256'},
+    {...input.keyEnvelope.kdf,salt:b64(15)},
+  ]) {
+    assert.throws(()=>store.write(OWNER_A,{...input,expectedRevision:2,keyEnvelope:{...input.keyEnvelope,kdf}}),status(400));
+    assert.deepEqual(store.read(OWNER_A),saved);
+  }
+  assert.throws(()=>store.write(OWNER_A,input),error=>status(409)(error)&&error.currentRevision===2);
+  assert.notDeepEqual(saved.dataEnvelope,initial.dataEnvelope);
+  const legacy=opaqueInput(OWNER_B);
+  assert.equal(store.write(OWNER_B,legacy).keyEnvelope.version,1);
+});
+
+test('OPAQUE v3 wrapping accepts only the fixed export-key context and rejects downgrade-shaped metadata without changing ciphertext', async t => {
+  const {open}=await fixture(t),store=open(),input=opaqueInput();
+  input.keyEnvelope={...input.keyEnvelope,version:3,kdf:{name:'OPAQUE-export',hash:'SHA-256',context:'drug-tracker:opaque:v1',salt:b64(16)}};
+  const saved=store.write(OWNER_A,input);
+  assert.equal(saved.dataEnvelope.version,1);assert.equal(saved.keyEnvelope.version,3);
+  for(const kdf of [
+    {...input.keyEnvelope.kdf,name:'HKDF'}, {...input.keyEnvelope.kdf,hash:'SHA-512'},
+    {...input.keyEnvelope.kdf,context:'another-application'}, {...input.keyEnvelope.kdf,iterations:600000},
+    {...input.keyEnvelope.kdf,exportKey:b64(64)}, {...input.keyEnvelope.kdf,salt:b64(15)},
+  ]) {
+    assert.throws(()=>store.write(OWNER_A,{...input,expectedRevision:1,keyEnvelope:{...input.keyEnvelope,kdf}}),status(400));
+    assert.deepEqual(store.read(OWNER_A),saved);
+  }
+  assert.throws(()=>store.write(OWNER_A,{...input,expectedRevision:1,dataEnvelope:{...input.dataEnvelope,version:3}}),status(400));
+  assert.deepEqual(store.export(OWNER_A).vault,saved);
+});
