@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          # Disposable CI-only credential, never a production secret.
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: '11.19.0'
+          run_install: false
+          cache: false
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types
+        run: pnpm check
+
+      - name: Run unit, API and PostgreSQL integration tests
+        env:
+          # The integration test also rejects non-loopback database URLs.
+          DRUG_TEST_POSTGRES_URL: postgres://postgres:ci-only-password@127.0.0.1:5432/postgres
+        run: |
+          # The tsx loader is needed by TSX fixtures imported by server tests too.
+          node --import tsx --test tests/*.test.ts tests/*.test.mjs
+
+      - name: Build local edition
+        env:
+          DRUG_EDITION: local
+          DRUG_BASE_PATH: /
+        run: pnpm exec vite build --outDir "$RUNNER_TEMP/drug-local-build"
+
+      - name: Build cloud edition
+        env:
+          DRUG_BUILD_OUT_DIR: ${{ runner.temp }}/drug-cloud-build
+        run: node scripts/heroku-build.mjs
+
+      - name: Confirm both builds contain the correct edition and policy pages
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          for (const edition of ['local', 'cloud']) {
+            const directory = join(process.env.RUNNER_TEMP, `drug-${edition}-build`);
+            const html = await readFile(join(directory, 'index.html'), 'utf8');
+            assert.ok(html.includes(`name="drug-edition" content="${edition}"`));
+            for (const policy of ['privacy.html', 'terms.html']) {
+              const text = await readFile(join(directory, policy), 'utf8');
+              assert.ok(text.includes('uhenrywksp@icloud.com'));
+              assert.ok(!/<script\b/i.test(text), 'Legal pages must remain script-free');
+            }
+          }
+          NODE
+
+      - name: Build again and verify reproducible frontend assets
+        env:
+          DRUG_BUILD_OUT_DIR: ${{ runner.temp }}/drug-cloud-repeat
+        run: |
+          node scripts/heroku-build.mjs
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const first = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'drug-cloud-build/build-info.json')));
+          const repeated = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'drug-cloud-repeat/build-info.json')));
+          assert.deepEqual(first, repeated, 'Same source and toolchain must produce identical assets and metadata');
+          assert.equal(first.sourceCommit, process.env.GITHUB_SHA);
+          NODE
+
+      - name: Upload verified cloud build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drug-cloud-${{ github.sha }}
+          path: ${{ runner.temp }}/drug-cloud-build/
+          retention-days: 14
+          if-no-files-found: error
+
+  provenance:
+    name: Attest verified build
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download this run's verified build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: drug-cloud-${{ github.sha }}
+          path: verified-build
+      - name: Attest verified main build manifest
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: verified-build/build-info.json

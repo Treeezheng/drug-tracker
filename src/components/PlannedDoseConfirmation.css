@@ -1,0 +1,13 @@
+.planned-confirmation-product{margin:0 0 12px;font-weight:500}
+.planned-confirmation-product>small{display:block;margin-top:4px;color:var(--muted);font-size:13px;font-weight:400}
+.planned-confirmation>.muted{font-size:13px;line-height:1.5;margin-bottom:18px}
+.planned-confirmation .field-pair{margin-bottom:14px}
+.planned-row-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.planned-row-actions>.text-button{min-height:44px}
+.setting-with-help{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:14px 0}
+.setting-with-help>.check-line{margin:0}
+.setting-help{display:contents}
+.setting-help>.icon-button{min-width:36px;min-height:36px;color:var(--muted)}
+.setting-help-text{flex-basis:100%;color:var(--muted);font-size:13px;line-height:1.5;margin:2px 0 6px}
+@media(max-width:700px){.saved-planned-row>.planned-row-actions{grid-column:3;grid-row:2}.planned-confirmation input{font-size:16px}}
+@media(max-width:380px){.saved-planned-row{grid-template-columns:18px minmax(0,1fr) auto}.saved-planned-row>.planned-row-actions{grid-column:3;grid-row:2 / 4;flex-direction:column;gap:0}}

@@ -19,11 +19,11 @@ function close(actual: number | null | undefined, expected: number, tolerance = 
   assert.ok(Math.abs(actual! - expected) <= tolerance, `Expected ${actual} to be within ${tolerance} of ${expected}`);
 }
 
-test('nothing contributes before administration, and skipped or pending doses are excluded', () => {
+test('valid future and skipped doses contribute zero; incomplete simulated rows remain pending', () => {
   for (const product of ['concerta', 'ritalin', 'vyvanse-capsule']) close(concentration(fixture(product), START - 1).value, 0);
   close(concentration(fixture('concerta', { status: 'skipped' }), START + HOUR).value, 0);
-  close(concentration(fixture('concerta', { administeredAt: '' }), START + HOUR).value, 0);
-  close(concentration(fixture('concerta', { administeredAt: 'invalid' }), START + HOUR).value, 0);
+  assert.equal(concentration(fixture('concerta', { administeredAt: '' }), START + HOUR).value, null);
+  assert.equal(concentration(fixture('concerta', { administeredAt: 'invalid' }), START + HOUR).value, null);
   assert.deepEqual(contributions([fixture('concerta', { status: 'skipped' }), fixture('ritalin', { id: 'pending', administeredAt: '' })], START + HOUR), []);
 });
 
@@ -208,7 +208,7 @@ test('custom package strengths cannot gain a reference curve by matching its tot
     const before = structuredClone(dose);
     assert.equal(modelGroup(dose).reference, false);
     const result = concentration(dose, START + 2 * HOUR);
-    assert.equal(result.value, null); assert.equal(result.unit, 'relative units'); assert.equal(result.evidence, 'D');
+    assert.equal(result.value, null); assert.equal(result.unit, 'ng/mL'); assert.equal(result.evidence, 'D');
     assert.deepEqual(dose, before);
   }
 });

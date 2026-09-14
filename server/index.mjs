@@ -108,7 +108,7 @@ function validate(kind, id, data) {
     zone(payload.timeZone);
     if (!['12h', '24h'].includes(payload.timeFormat)) bad('Choose a 12h or 24h time format.');
     if (payload.timeIncrementMinutes !== undefined && ![1, 5, 10].includes(payload.timeIncrementMinutes)) bad('Choose a 1, 5 or 10 minute time increment.');
-    for (const field of ['sleepEnabled', 'weekendEnabled']) {
+    for (const field of ['sleepEnabled', 'weekendEnabled', 'plannedDoseConfirmation']) {
       if (payload[field] !== undefined && typeof payload[field] !== 'boolean') bad(`Invalid ${field}.`);
     }
     for (const field of ['bedtime', 'wakeTime', 'weekendBedtime', 'weekendWakeTime']) {
@@ -669,6 +669,7 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
         if (path === '/api/data' && method === 'GET') return send(res, 200, transaction(() => { cleanupFavorites(user.id); return dataFor(user.id); }));
         if (path === '/api/import' && method === 'POST') {
           const body = await readJson(req, false, IMPORT_LIMIT);
+          requireUser(req);
           if (!['merge', 'replace'].includes(body.mode)) bad('Choose merge or replace for the import.');
           const prepared = prepareImport(body.backup, user.id);
           const result = transaction(() => {
@@ -707,6 +708,7 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
           if (!(await passwordMatches(body.password, user.password_hash))) throw new ApiError(401, 'Password is incorrect.');
           // A concurrently reset password invalidates confirmation from an old session.
           transaction(() => {
+            requireUser(req);
             const fresh = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id);
             if (!fresh || fresh.password_hash !== user.password_hash) throw new ApiError(401, 'Sign in again before deleting this account.');
             db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
@@ -714,11 +716,15 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
           cookie(res);
           return send(res, 200, { ok: true });
         }
-        if (path === '/api/profile' && method === 'PUT') return send(res, 200, putEntity('profile', user.id, user.id, await readJson(req)));
+        if (path === '/api/profile' && method === 'PUT') {
+          const body = await readJson(req); requireUser(req);
+          return send(res, 200, putEntity('profile', user.id, user.id, body));
+        }
         const match = /^\/api\/(doses|scenarios|favorites|checkins|inventory)\/([A-Za-z0-9_-]{1,100})$/.exec(path);
         if (match && ['PUT', 'DELETE'].includes(method)) {
           const [, kind, id] = match;
           const body = await readJson(req);
+          requireUser(req);
           return send(res, 200, method === 'PUT' ? putEntity(kind, id, user.id, body) : deleteEntity(kind, id, user.id, body));
         }
         throw new ApiError(404, 'Endpoint not found.');

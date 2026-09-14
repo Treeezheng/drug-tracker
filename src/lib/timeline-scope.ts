@@ -1,5 +1,6 @@
 import { products } from './catalog';
-import { concentration, CONCERTA_TRACE, modelGroup } from './model';
+import { concentration, concentrationAnalyte, CONCERTA_TRACE, contributesToGroup, doseTimestamp, modelGroup, referenceForDose } from './model';
+import { hasMissingTimelineData } from './timeline-data';
 import type { Dose } from './types';
 
 export const TIMELINE_DISPLAY_THRESHOLD = 0.001;
@@ -16,10 +17,7 @@ export interface TimelineScope {
   doses: Dose[];
   sourceIds: string[];
   omittedHistoryCount: number;
-}
-
-function isTimed(dose: Dose): boolean {
-  return !!dose.productId && !!dose.administeredAt && Number.isFinite(Date.parse(dose.administeredAt));
+  omittedUnknownHistoryCount: number;
 }
 
 /**
@@ -30,7 +28,7 @@ function isTimed(dose: Dose): boolean {
  * whose known contributions together reach the display threshold.
  */
 function maximumKnownContribution(dose: Dose, start: number, end: number, publishedOnly: boolean): number {
-  const admin = Date.parse(dose.administeredAt);
+  const admin = doseTimestamp(dose);
   if (!Number.isFinite(admin)) return 0;
   const product = products.find(p => p.id === dose.productId);
   const elapsedHours: number[] = [];
@@ -55,9 +53,10 @@ function maximumKnownContribution(dose: Dose, start: number, end: number, publis
  * Select groups to display, without changing or truncating any dose contribution.
  * A current recorded event or explicit editor row always keeps its group. Every
  * earlier record in a kept group remains, including unknown contributions.
- * Other history-only groups are hidden only when their known contribution upper
- * bound is below 0.001 ng/mL / relative units. Unknown is never returned as zero:
- * this helper only chooses display groups and reports omitted historical events.
+ * History-only groups with a small known contribution may be hidden. Unknown
+ * histories are counted separately; this never establishes that they cleared.
+ * Every unknown dose of a displayed concentration analyte remains in its total,
+ * even when a separate saved illustration uses relative units.
  */
 export function scopeTimeline({ actual, drafts, start, end, publishedOnly = false }: TimelineScopeInput): TimelineScope {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
@@ -75,11 +74,12 @@ export function scopeTimeline({ actual, drafts, start, end, publishedOnly = fals
     editingById.set(dose.id, dose);
   }
   const editing = [...editingById.values()];
-  // Actual events after the view cannot have contributed to this view.
-  const records = [...recordsById.values()].filter(dose => isTimed(dose) && Date.parse(dose.administeredAt) < end);
+  // Only a known future time can exclude an actual record. An invalid time
+  // cannot prove that its contribution is outside the view.
+  const records = [...recordsById.values()].filter(dose => !Number.isFinite(doseTimestamp(dose)) || doseTimestamp(dose) < end);
   const keep = new Set(editing.map(dose => modelGroup(dose).group));
   for (const dose of records) {
-    if (Date.parse(dose.administeredAt) >= start) keep.add(modelGroup(dose).group);
+    if (!Number.isFinite(doseTimestamp(dose)) || doseTimestamp(dose) >= start) keep.add(modelGroup(dose).group);
   }
   const bounds = new Map<string, number>();
   for (const dose of records) {
@@ -90,12 +90,18 @@ export function scopeTimeline({ actual, drafts, start, end, publishedOnly = fals
   for (const [group, bound] of bounds) {
     if (bound >= TIMELINE_DISPLAY_THRESHOLD) keep.add(group);
   }
-  const retained = records.filter(dose => keep.has(modelGroup(dose).group));
+  const isKept=(dose:Dose)=>[...keep].some(group=>contributesToGroup(dose,group));
+  const retained = records.filter(isKept);
+  const omitted=records.filter(dose=>Date.parse(dose.administeredAt)<start&&!isKept(dose));
   const doses = [...retained, ...editing];
-  const sourceIds = [...new Set(doses.flatMap(dose => products.find(p => p.id === dose.productId)?.sourceIds ?? []))];
+  const sourceIds = [...new Set(doses.flatMap(dose => [
+    ...(products.find(p => p.id === dose.productId)?.sourceIds ?? []),
+    ...(referenceForDose(dose)?.sourceIds ?? []),
+  ]))];
   return {
     doses,
     sourceIds,
-    omittedHistoryCount: records.filter(dose => Date.parse(dose.administeredAt) < start && !keep.has(modelGroup(dose).group)).length,
+    omittedHistoryCount: omitted.length,
+    omittedUnknownHistoryCount: omitted.filter(dose=>hasMissingTimelineData([dose],start,end,publishedOnly,concentrationAnalyte(dose)?.group)).length,
   };
 }

@@ -70,9 +70,9 @@ DRUG_EDITION=cloud DRUG_BASE_PATH=/drug/ pnpm build
 
 确认 `dist/index.html` 有且只有一个 `<meta name="drug-edition" content="cloud">`，资源路径以 `/drug/` 开头。该环境变量只在构建时决定入口，不能在运行时把本机产物变成云版。生产服务不运行 Vite dev server；现有 dev proxy 仍用于本机 4310。
 
-将 `dist/`、`server/cloud.mjs`、`server/vault-store.mjs`、`package.json`、`deploy/` 放入一个**新建的**版本目录，例如 `/opt/drug-tracker/releases/20260913-<实际短commit>/`，然后设置 `/opt/drug-tracker/current` 指向它。路径里的示例短 commit 必须替换为实际值。首次部署才创建 `current`；更新时在旧版本和备份可恢复后再切换。
+将经过审核的完整应用源文件、`dist/`、`server/`、`src/lib/password-policy.mjs`、`package.json`、`pnpm-lock.yaml` 和 `deploy/` 放入一个**新建的**版本目录，例如 `/opt/drug-tracker/releases/20260913-<实际短commit>/`，然后设置 `/opt/drug-tracker/current` 指向它。路径里的示例短 commit 必须替换为实际值。首次部署才创建 `current`；更新时在旧版本和备份可恢复后再切换。
 
-当前云入口运行依赖只有 Node 内置模块和同目录 `vault-store.mjs`，静态产物已包含浏览器依赖，因此这个最小发布包不需要生产 `node_modules`。如果以后服务新增外部运行依赖，必须重新核对发布包。不要对整个服务器目录运行宽泛的覆盖或删除命令。
+当前服务使用锁定版本的 OPAQUE、PostgreSQL 和本地密码策略运行依赖；必须保留 `package.json`/`pnpm-lock.yaml`，在发布目录用 `pnpm install --prod --frozen-lockfile` 安装生产依赖。不能只复制入口和 vault-store，也不能省略其余服务模块。发布包不包括本机数据库、环境秘密、私人备份或测试产物。不要对整个服务器目录运行宽泛的覆盖或删除命令。
 
 在实际版本目录下安装这两个配置文件：
 
@@ -81,30 +81,15 @@ sudo install -m 0600 -o root -g root deploy/.env.example /etc/drug-tracker/cloud
 sudo install -m 0644 -o root -g root deploy/drug-tracker.service /etc/systemd/system/drug-tracker.service
 ```
 
-`cloud.env` 只有四个非秘密参数：数据库绝对路径、HTTPS origin、4312 端口和静态目录。服务密码、加密密语、恢复密钥都不能写入这里。`CLOUD_ALLOW_INSECURE_LOOPBACK` 在 HTTPS 部署中保持未设置。
+`cloud.env` 只有四个非秘密参数：数据库绝对路径、HTTPS origin、4312 端口和静态目录。账户密码、完整恢复码和数据密钥都不能写入这里。`CLOUD_ALLOW_INSECURE_LOOPBACK` 在 HTTPS 部署中保持未设置。
 
-## 5. 可选：预先创建第一个服务器账户
+## 5. 通过安全网页注册
 
-公开注册可以在服务启动后通过网页创建独立账户，因此本步骤可跳过，空云数据库可直接启动。CLI bootstrap 仍只允许在空库中预先建立第一个账户，重复执行会拒绝；它不限制之后通过注册创建其他账户，也不提供 HTTP bootstrap。CLI 只从短暂环境变量读取账户密码，命令行参数不接受密码。用户名为 3–64 位 ASCII 字母、数字、点、下划线或连字符，首位为字母或数字；账户密码为 10–256 个字符。
+空云数据库可直接启动；完成 HTTPS 验证后，在网页创建单密码 OPAQUE 账户。CLI bootstrap 已禁用，不能用 `CLOUD_ADMIN_PASSWORD` 创建新账户；常驻服务若发现该密码环境变量会拒绝启动。服务不会接收新账户的原始密码、客户端 export key 或数据密钥。
 
-进入一次临时子 shell，下面的 `read` 会交互询问；不要把真实密码直接写进命令、聊天、配置或 Git。此密码只用于服务器登录，浏览器稍后另设不同的加密密语。
+OPAQUE 服务 setup 会在共享数据库中原子创建一次并持久保留；不需要把它手工放入环境变量，也不可在重启时重新生成。必须备份整库，包含 setup、OPAQUE 密码文件、恢复验证摘要和密文。数据库连同 setup 被盗仍存在离线猜密码风险；它不是独立于数据库的秘密边界。
 
-```sh
-sudo -u drug-tracker /bin/bash --noprofile --norc
-set +o history
-set +x
-export CLOUD_DB_PATH=/var/lib/drug-tracker/cloud.sqlite
-read -r -p 'Account username: ' CLOUD_ADMIN_USERNAME
-read -r -s -p 'Account password: ' CLOUD_ADMIN_PASSWORD
-printf '\n'
-export CLOUD_ADMIN_USERNAME CLOUD_ADMIN_PASSWORD
-/opt/node24/bin/node /opt/drug-tracker/current/server/cloud.mjs bootstrap
-bootstrap_status=$?
-unset CLOUD_ADMIN_USERNAME CLOUD_ADMIN_PASSWORD
-exit "$bootstrap_status"
-```
-
-确认输出 `Drug Tracker cloud account configured.` 后再启动服务。密码只短暂存在于该 shell 和初始化进程的环境 / 内存中，服务器管理员权限仍可读取；不是抵抗已被控制服务器的秘密输入协议。常驻服务若发现 `CLOUD_ADMIN_PASSWORD` 会拒绝启动。当前没有云账户密码重置 CLI，遗忘时不要删除数据库再 bootstrap；先保留原库和密文，另做保留 owner ID 的受控恢复。
+用户离线保存完整恢复码。恢复流程只将独立的账户验证部分交给服务器，解密部分不上传；最终恢复原子更换密码文件、数据密钥、密文和恢复验证摘要并撤销旧会话。不要删除数据库或新建 owner 来“恢复”旧记录。详细请求与失败语义见 [单密码协议](opaque-protocol-v1.md)。
 
 ## 6. 验证内部服务，再配置 HTTPS
 
@@ -135,11 +120,11 @@ Caddy 根据真实域名自动申请和续期证书，需要 DNS 正确、证书
 
 ## 7. 上线验收与恢复
 
-使用独立合成记录验证：`/drug` 跳转 `/drug/`；根网站保留原行为；资源、字体、Privacy、API 均处于正确路径；访客无需账号即可演算，公开注册创建独立账号且不上传访客草稿；跨源写入失败；cookie 具有 Secure / HttpOnly / SameSite=Strict / Path=/drug/。Mac 和 iPhone Safari 分别验证注册、登录、设置不同加密密语、恢复密钥解锁、保存、刷新、并发冲突、断网与重试、退出及重新打开。至少两个合成账户分别验证读取、保存及跨标签页账号切换不会混用另一账户的 vault。
+使用独立合成记录验证：`/drug` 跳转 `/drug/`；根网站保留原行为；资源、字体、Privacy、API 均处于正确路径；访客无需账号即可演算，公开注册创建独立账号且不上传访客草稿；跨源写入失败；cookie 具有 Secure / HttpOnly / SameSite=Strict / Path=/drug/。Mac 和 iPhone Safari 分别验证单密码注册与登录、恢复码恢复、密码更换、恢复码轮换、保存、刷新、并发冲突、断网重试、退出及重新打开。至少两个合成账户分别验证读取、保存及跨标签页账号切换不会混用另一账户的 vault。
 
-当前登录账户采用在线保存、内存解密，不持久化账户明文缓存；关闭页面可能丢弃尚未确认的编辑。独立访客演算有明文 localStorage，必须明确显示并支持 Clear simulation；不得把访客模式描述为加密。当前 vault / JSON 备份是现存记录快照，不保留以前的纠正版本或已删除历史；CSV / PDF / JSON 下载均为用户主动生成的明文。使用与访客不同的合成药名 / 笔记，检查网络、数据库、WAL 和浏览器存储不得出现账户健康明文或加密密语 / 恢复密钥，不能仅以算法测试通过作为完整链路验收。
+当前登录账户采用在线保存、内存解密，不持久化账户明文缓存；关闭页面可能丢弃尚未确认的编辑。独立访客演算有明文 localStorage，必须明确显示并支持 Clear simulation；不得把访客模式描述为加密。当前 vault / JSON 备份是现存记录快照，不保留以前的纠正版本或已删除历史；CSV / PDF / JSON 下载均为用户主动生成的明文。使用与访客不同的合成药名 / 笔记，检查网络、数据库、WAL 和浏览器存储不得出现账户健康明文、原始密码、完整恢复码或数据密钥，不能仅以算法测试通过作为完整链路验收。
 
-备份需要完整云 SQLite（包括同一 owner 的账户、包装密钥、密文和版本），同时由用户在服务器之外保存客户端恢复密钥。可用 SQLite `.backup` 创建一致性快照，不能只复制正在写入的主文件而忽略 WAL；先在临时路径验证恢复，不覆盖唯一原库。[SQLite CLI 备份](https://sqlite.org/cli.html#special_commands_to_sqlite3_dot_commands_)
+备份需要完整云 SQLite（包括 OPAQUE setup、同一 owner 的账户密码文件、恢复验证摘要、包装密钥、密文和版本），同时由用户在服务器之外保存客户端恢复密钥。可用 SQLite `.backup` 创建一致性快照，不能只复制正在写入的主文件而忽略 WAL；先在临时路径验证恢复，不覆盖唯一原库。[SQLite CLI 备份](https://sqlite.org/cli.html#special_commands_to_sqlite3_dot_commands_)
 
 ```sh
 sudo install -d -m 0700 -o drug-tracker -g drug-tracker /var/backups/drug-tracker
@@ -148,6 +133,6 @@ sudo -u drug-tracker sqlite3 /var/lib/drug-tracker/cloud.sqlite ".backup '/var/b
 sudo chmod 0600 /var/backups/drug-tracker/cloud-20260913.sqlite
 ```
 
-此数据库快照仍含账户散列与会话元数据，需要私密保管。恢复保留原账户 owner ID；重新 bootstrap 新 owner 不会自动获得原密文。代码回退不等于数据库格式回退，更新前保留审核版本、当前数据库快照与可验证的恢复流程。Azure 机器快照不能替代应用恢复演练。
+此数据库快照仍含 OPAQUE setup、密码文件、恢复验证摘要与会话元数据，需要私密保管。恢复必须保留原账户 owner ID 和 setup；新建账户不会自动获得原密文。代码回退不等于数据库格式回退，更新前保留审核版本、当前数据库快照与可验证的恢复流程。Azure 机器快照不能替代应用恢复演练。
 
 本轮对部署模板做了代码契约和静态审查；当前 Mac 没有 Caddy / systemd，**尚未运行这两个工具的真实校验，也未做 Azure VM 或真实域名 HTTPS 联调**。以上检查命令是部署时必须完成的步骤，不是已通过的测试报告。

@@ -69,10 +69,12 @@ test('noncatalog packages never gain a reference model just by matching the tota
   assert.equal(modelGroup(newDose('ritalin','10')).reference,true);
 });
 
-test('only custom packages expose the small input with visible units and explicit combination order',()=>{
-  const render=(productId:string,strength:string)=>renderToStaticMarkup(createElement(DoseEditor,{dose:newDose(productId,strength),index:0,profile,onChange:()=>{}}));
-  const listed=render('ritalin','10');assert.match(listed,/<option value="custom">Custom<\/option>/);assert.doesNotMatch(listed,/aria-label="Dose 1 custom strength/);
-  const custom=render('ritalin','7.5');assert.match(custom,/<option value="custom" selected="">Custom<\/option>/);assert.match(custom,/aria-label="Dose 1 custom strength in mg"/);assert.match(custom,/inputMode="decimal"/);
-  const liquid=render('onyda-xr','0.125');assert.match(liquid,/custom strength in mg\/mL/);
-  const combo=render('azstarys','7.5/1.2');assert.match(combo,/serdexmethylphenidate \/ dexmethylphenidate/);assert.match(combo,/inputMode="text"/);
+test('dose strength routes More to medication management and keeps saved custom packages as selected options',()=>{
+  const render=(productId:string,strength:string)=>renderToStaticMarkup(createElement(DoseEditor,{dose:newDose(productId,strength),index:0,profile,onMoreMedications:()=>{},onChange:()=>{throw Error('Rendering must not change a record.');}}));
+  for(const [productId,strength] of [['ritalin','10'],['ritalin','7.5'],['onyda-xr','0.125'],['azstarys','7.5/1.2']]){
+    const html=render(productId,strength);
+    assert.match(html,/<option value="__more__">More…<\/option>/);
+    assert.ok(html.includes(`<option value="${strength}" selected="">${strength}</option>`));
+    assert.doesNotMatch(html,/aria-label="Dose 1 custom strength|dose-custom-strength|>Custom<|value="__more__" selected/);
+  }
 });

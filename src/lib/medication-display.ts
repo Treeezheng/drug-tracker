@@ -39,6 +39,13 @@ export function groupMedicationProducts(products: readonly Product[]): Medicatio
   return [...groups.values()];
 }
 
+/** Scope strength choices to a user-selected package identity, without changing the catalog. */
+export function medicationVariantGroup(group: MedicationGroup, productId: string): MedicationGroup {
+  const product = group.products.find(item => item.id === productId);
+  if (!product) throw new Error('Choose a product from this medication group.');
+  return { ...group, products: [product], defaultProduct: product };
+}
+
 /** Search the whole group so a brand match never hides its generic strengths. */
 export function matchesMedicationGroup(group: MedicationGroup, query: string): boolean {
   return `${group.title} ${group.brand || ''} ${group.products.map(p => `${p.name} ${p.generic} ${p.formulation}`).join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());

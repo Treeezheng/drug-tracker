@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { CloudError } from './cloud-errors.mjs';
 import { validateVaultWrite, VaultStoreError } from './vault-store.mjs';
+import { cappedSessionExpiry, SESSION_SECONDS } from './cloud-session.mjs';
+import { initializeOpaquePostgres, opaquePostgresMethods, validateOrdinaryVaultKey } from './cloud-opaque-postgres.mjs';
 
 /** Ignore URL TLS overrides: pg's URL parser otherwise replaces the verified ssl object. */
 export function postgresConfiguration({ databaseUrl, databaseCaPath, allowInsecurePostgresLoopback = false, databasePoolSize = 4 } = {}) {
@@ -56,7 +58,7 @@ export async function openCloudPostgres(options) {
           singleton INTEGER PRIMARY KEY CHECK(singleton=1), edition TEXT NOT NULL, version INTEGER NOT NULL
         )`);
       const meta = (await client.query('SELECT edition,version FROM drug_tracker.meta WHERE singleton=1')).rows[0];
-      if (meta && (meta.edition !== 'drug-cloud-encrypted' || meta.version !== 1)) throw new CloudError(400, 'Unsupported PostgreSQL cloud database version.');
+      if (meta && (meta.edition !== 'drug-cloud-encrypted' || ![1, 2, 3].includes(meta.version))) throw new CloudError(400, 'Unsupported PostgreSQL cloud database version.');
       if (!meta) {
         const existing = await client.query("SELECT tablename FROM pg_tables WHERE schemaname='drug_tracker' AND tablename<>'meta'");
         if (existing.rowCount) throw new CloudError(400, 'The existing PostgreSQL cloud schema has no supported version.');
@@ -74,8 +76,23 @@ export async function openCloudPostgres(options) {
           revision BIGINT NOT NULL CHECK(revision>0 AND revision<=9007199254740991),
           data_envelope JSONB NOT NULL, key_envelope JSONB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
-        CREATE TABLE drug_tracker.rate_limits (kind TEXT PRIMARY KEY CHECK(kind IN ('login','register')), count BIGINT NOT NULL, until_ms BIGINT NOT NULL);
         INSERT INTO drug_tracker.meta VALUES (1,'drug-cloud-encrypted',1);`);
+      }
+      if (!meta || meta.version === 1) {
+        // Ephemeral global quotas contain no account data; replace them atomically.
+        await client.query(`DROP TABLE IF EXISTS drug_tracker.rate_limits;
+          CREATE TABLE drug_tracker.rate_limits (
+            kind TEXT NOT NULL CHECK(kind IN ('login','register')),
+            subject_hash TEXT NOT NULL CHECK(subject_hash ~ '^[0-9a-f]{64}$'),
+            count BIGINT NOT NULL, until_ms BIGINT NOT NULL, PRIMARY KEY(kind,subject_hash)
+          );
+          CREATE INDEX rate_limits_expiry ON drug_tracker.rate_limits(until_ms);
+          UPDATE drug_tracker.meta SET version=2 WHERE singleton=1;`);
+      }
+      if (!meta || meta.version < 3) await initializeOpaquePostgres(client);
+      for (const row of (await client.query('SELECT token_hash,created_at,expires_at FROM drug_tracker.sessions')).rows) {
+        const capped = cappedSessionExpiry(row);
+        if (capped < Number(row.expires_at)) await client.query('UPDATE drug_tracker.sessions SET expires_at=$1 WHERE token_hash=$2', [capped, row.token_hash]);
       }
     });
   } catch (error) { await pool.end(); throw error; }
@@ -86,6 +103,12 @@ export async function openCloudPostgres(options) {
     const row = (await client.query(`${sessionQuery} FOR SHARE OF s`, [tokenHash])).rows[0];
     if (!row || row.id !== owner) throw new CloudError(401, 'Sign in to access your encrypted vault.');
   };
+  const lockOwner = async (client, owner, mode = 'SHARE') => {
+    // Lock order is account, then session, then vault everywhere that needs both.
+    const row = (await client.query(`SELECT * FROM drug_tracker.accounts WHERE id=$1 FOR ${mode}`, [owner])).rows[0];
+    if (!row) throw new CloudError(401, 'The account changed. Sign in again.');
+    return row;
+  };
   const addSession = async (client, owner, value) => {
     await client.query('INSERT INTO drug_tracker.sessions VALUES ($1,$2,$3,$4)', [value.tokenHash, owner, value.expiresAt, new Date().toISOString()]);
   };
@@ -94,9 +117,24 @@ export async function openCloudPostgres(options) {
     keyEnvelope: row.key_envelope, createdAt: row.created_at, updatedAt: row.updated_at,
   } : null;
   const read = async (client, owner) => snapshot((await client.query('SELECT * FROM drug_tracker.vaults WHERE owner_id=$1', [owner])).rows[0]);
+  const security = async (client, owner, tokenHash) => {
+    const current = (await client.query('SELECT created_at,expires_at FROM drug_tracker.sessions WHERE token_hash=$1 AND owner_id=$2', [tokenHash, owner])).rows[0];
+    const count = (await client.query('SELECT count(*)::int AS n FROM drug_tracker.sessions WHERE owner_id=$1 AND expires_at>floor(extract(epoch FROM clock_timestamp())*1000)::bigint', [owner])).rows[0].n;
+    return { currentSession: { createdAt: current.created_at, expiresAt: new Date(Number(current.expires_at)).toISOString() }, activeSessionCount: count, sessionLifetimeHours: SESSION_SECONDS / 3600 };
+  };
   return {
+    ...opaquePostgresMethods({pool,transaction,lockOwner,requireSession,addSession,read}),
     accountByUsername: async name => (await pool.query('SELECT * FROM drug_tracker.accounts WHERE username=$1', [name])).rows[0] ?? null,
     session: async tokenHash => (await pool.query(sessionQuery, [tokenHash])).rows[0] ?? null,
+    securityInfo(owner, tokenHash) {
+      return transaction(async client => { await lockOwner(client, owner); await requireSession(client, owner, tokenHash); return security(client, owner, tokenHash); });
+    },
+    verifyPassword(owner, tokenHash, expectedPasswordHash) {
+      return transaction(async client => {
+        const fresh = await lockOwner(client, owner); await requireSession(client, owner, tokenHash);
+        if (fresh.password_hash !== expectedPasswordHash) throw new CloudError(401, 'The account changed. Sign in again.');
+      });
+    },
     async register(account, value) {
       await pool.query('DELETE FROM drug_tracker.sessions WHERE expires_at<=floor(extract(epoch FROM clock_timestamp())*1000)::bigint');
       try {
@@ -108,7 +146,7 @@ export async function openCloudPostgres(options) {
       } catch (error) { if (error.code === '23505' && error.constraint === 'accounts_username_key') throw new CloudError(409, 'Username is unavailable.'); throw error; }
     },
     async login(account, value) {
-      // Expired-session cleanup must finish before holding an account lock (writes lock session first).
+      // Expired-session cleanup must finish before holding an account lock (writes lock account, then session).
       await pool.query('DELETE FROM drug_tracker.sessions WHERE expires_at<=floor(extract(epoch FROM clock_timestamp())*1000)::bigint');
       return transaction(async client => {
         const fresh = (await client.query('SELECT * FROM drug_tracker.accounts WHERE id=$1 AND password_hash=$2 FOR SHARE', [account.id, account.password_hash])).rows[0];
@@ -124,16 +162,44 @@ export async function openCloudPostgres(options) {
         await client.query('DELETE FROM drug_tracker.sessions WHERE token_hash=$1', [tokenHash]);
       });
     },
+    deleteAccount(owner, tokenHash, expectedPasswordHash) {
+      return transaction(async client => {
+        const fresh = await lockOwner(client, owner, 'UPDATE');
+        await requireSession(client, owner, tokenHash);
+        if (fresh.password_hash !== expectedPasswordHash) throw new CloudError(401, 'The account changed. Sign in again.');
+        await client.query('DELETE FROM drug_tracker.vaults WHERE owner_id=$1', [owner]);
+        await client.query('DELETE FROM drug_tracker.sessions WHERE owner_id=$1', [owner]);
+        await client.query('DELETE FROM drug_tracker.accounts WHERE id=$1', [owner]);
+      });
+    },
+    logoutAll(owner, tokenHash, expectedPasswordHash) {
+      return transaction(async client => {
+        const fresh = await lockOwner(client, owner, 'UPDATE'); await requireSession(client, owner, tokenHash);
+        if (fresh.password_hash !== expectedPasswordHash) throw new CloudError(401, 'The account changed. Sign in again.');
+        await client.query('DELETE FROM drug_tracker.sessions WHERE owner_id=$1', [owner]);
+      });
+    },
+    changePassword(owner, tokenHash, expectedPasswordHash, newPasswordHash, replacement) {
+      return transaction(async client => {
+        const fresh = await lockOwner(client, owner, 'UPDATE'); await requireSession(client, owner, tokenHash);
+        if (fresh.password_hash !== expectedPasswordHash) throw new CloudError(401, 'The account changed. Sign in again.');
+        await client.query('UPDATE drug_tracker.accounts SET password_hash=$1 WHERE id=$2', [newPasswordHash, owner]);
+        await client.query('DELETE FROM drug_tracker.sessions WHERE owner_id=$1', [owner]);
+        await addSession(client, owner, replacement);
+        return { user: { ...fresh, password_hash: newPasswordHash }, security: await security(client, owner, replacement.tokenHash) };
+      });
+    },
     readVault(owner, tokenHash) {
-      return transaction(async client => { await requireSession(client, owner, tokenHash); return read(client, owner); });
+      return transaction(async client => { await lockOwner(client, owner); await requireSession(client, owner, tokenHash); return read(client, owner); });
     },
     writeVault(owner, tokenHash, input) {
       const accepted = validateVaultWrite(owner, input);
       return transaction(async client => {
-        await requireSession(client, owner, tokenHash);
         // Lock the existing owner row, including before their first vault exists. No first-write upsert race.
-        await client.query('SELECT id FROM drug_tracker.accounts WHERE id=$1 FOR UPDATE', [owner]);
-        const current = (await client.query('SELECT revision,created_at FROM drug_tracker.vaults WHERE owner_id=$1', [owner])).rows[0];
+        const fresh = await lockOwner(client, owner, 'UPDATE');
+        await requireSession(client, owner, tokenHash);
+        const current = (await client.query('SELECT revision,created_at,key_envelope FROM drug_tracker.vaults WHERE owner_id=$1', [owner])).rows[0];
+        validateOrdinaryVaultKey(fresh,current,input.keyEnvelope);
         const revision = Number(current?.revision ?? 0);
         if (revision !== accepted.expectedRevision) throw new VaultStoreError(409, 'This encrypted vault changed. Reload before saving.', { currentRevision: revision });
         if (revision >= Number.MAX_SAFE_INTEGER) throw new VaultStoreError(409, 'The encrypted vault revision limit was reached.');
@@ -144,13 +210,14 @@ export async function openCloudPostgres(options) {
         return read(client, owner);
       });
     },
-    async consumeRateLimit(kind, limit, duration) {
-      // One fixed-window budget per app/database; forwarded IP headers cannot evade it across dynos.
+    async consumeRateLimit(kind, subjectHash, limit, duration) {
+      if (!['login', 'register'].includes(kind) || !/^[0-9a-f]{64}$/.test(subjectHash)) throw new CloudError(400, 'Invalid account quota.');
       const now = 'floor(extract(epoch FROM clock_timestamp())*1000)::bigint';
-      const result = await pool.query(`INSERT INTO drug_tracker.rate_limits AS r VALUES ($1,1,${now}+$2)
-        ON CONFLICT(kind) DO UPDATE SET count=CASE WHEN r.until_ms<=${now} THEN 1 ELSE LEAST(r.count+1,1000000000) END,
-        until_ms=CASE WHEN r.until_ms<=${now} THEN ${now}+$2 ELSE r.until_ms END
-        RETURNING count,GREATEST(1,ceil((until_ms-${now})/1000.0)) AS retry_after`, [kind, duration]);
+      await pool.query(`DELETE FROM drug_tracker.rate_limits WHERE until_ms<=${now}`);
+      const result = await pool.query(`INSERT INTO drug_tracker.rate_limits AS r VALUES ($1,$2,1,${now}+$3)
+        ON CONFLICT(kind,subject_hash) DO UPDATE SET count=CASE WHEN r.until_ms<=${now} THEN 1 ELSE LEAST(r.count+1,1000000000) END,
+        until_ms=CASE WHEN r.until_ms<=${now} THEN ${now}+$3 ELSE r.until_ms END
+        RETURNING count,GREATEST(1,ceil((until_ms-${now})/1000.0)) AS retry_after`, [kind, subjectHash, duration]);
       if (Number(result.rows[0].count) > limit) throw new CloudError(429, 'Too many account attempts. Please wait before trying again.', { retryAfter: Number(result.rows[0].retry_after) });
     },
     async close() { if (!closed) { closed = true; await pool.end(); } },

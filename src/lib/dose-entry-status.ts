@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Temporal } from '@js-temporal/polyfill';
-import type { Dose, Scenario } from './types';
+import type { Dose, Profile, Scenario } from './types';
 
 export type DoseEntryStatus = 'actual' | 'planned';
 
@@ -49,6 +49,11 @@ export function prepareDoseCorrection(dose: Dose, savedStatus: DoseEntryStatus, 
 export function confirmPlannedDose(dose: Dose, now = Date.now()): Dose {
   if (dose.status !== 'planned') throw new Error('This dose is no longer planned. Refresh before continuing.');
   return prepareDoseCorrection(dose, 'actual', now);
+}
+
+/** This only exposes an explicit action. It never changes a saved status. */
+export function canConfirmPlannedDose(dose: Dose, profile: Pick<Profile, 'plannedDoseConfirmation'>, now = Date.now()): boolean {
+  return profile.plannedDoseConfirmation !== false && dose.status === 'planned' && doseEntryStatus(dose.administeredAt, now) === 'actual';
 }
 
 /** Both saved states suppress a legacy Workspace copy; skipped records do too. */

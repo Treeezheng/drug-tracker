@@ -87,6 +87,8 @@ img { max-width: 100%; }
 .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .field > span, .field > label { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
 .field input, .field select, .field textarea, select { width: 100%; height: 42px; border: 1px solid #cbd2da; border-radius: 5px; background: #fff; color: var(--text); padding: 8px 10px; font-size: 14px; }
+select:not([multiple]):not([size]) { -webkit-appearance: none; appearance: none; padding-right: 36px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%2360656d' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 14px 14px; }
+@media (forced-colors: active) { select:not([multiple]):not([size]) { -webkit-appearance: auto; appearance: auto; background-image: none; padding-right: 10px; } }
 .field input:hover, .field select:hover, .field textarea:hover { border-color: #9aa8b8; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 .field input::placeholder, .field textarea::placeholder { color: #6a7480; opacity: 1; }
@@ -156,8 +158,14 @@ details > p { color: var(--muted); font-size: 13px; margin: 6px 0 12px; }
 /* Timeline carries the visual emphasis; detailed readings remain inspectable. */
 .timeline-composition, .chart-main { min-width: 0; }
 .chart-main { padding: 0; }
-.chart-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.chart-heading h3 { font-size: 14px; font-weight: 500; }
+.chart-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin-bottom: 8px; }
+.chart-heading h2 { font-size: 14px; font-weight: 500; }
+.chart-heading > h3 { min-width: 0; overflow-wrap: anywhere; }
+.chart-heading-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; text-align: right; }
+.chart-simulation-note { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.timeline-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 150px; padding: 24px 12px; text-align: center; }
+.timeline-empty h2 { font-size: 17px; font-weight: 500; }
+.timeline-empty p { color: var(--muted); font-size: 14px; }
 .section-kicker { font-size: 12px; color: var(--muted); font-weight: 500; }
 .chart-heading .section-kicker { display: none; }
 .analyte-panel + .analyte-panel { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 20px; }
@@ -281,7 +289,7 @@ tr:last-child td { border-bottom: 0; }
 .checkin-record { padding: 16px 0; border-top: 1px solid var(--border); }
 .checkin-record span { color: var(--muted); margin-left: 14px; font-size: 13px; }
 .checkin-record p { margin-top: 7px; }
-.app-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); margin-top: 32px; padding-top: 18px; color: var(--muted); font-size: 12px; }
+.app-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px 24px; border-top: 1px solid var(--border); margin-top: 32px; padding-top: 18px; color: var(--muted); font-size: 12px; }
 
 /* Native dialogs retain focus behavior; error text stays inside the form. */
 .modal { width: min(520px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 40px); overflow-y: auto; padding: 24px; border: 1px solid #d0d7e0; border-radius: 10px; background: #fff; color: var(--text); box-shadow: 0 16px 60px #1d293329; }
@@ -631,7 +639,7 @@ tr:last-child td { border-bottom: 0; }
 .row-state .button:not(:disabled) { background: #f0f4f9; color: #345b83; border-color: #d4e0ed; }
 .row-state .button:not(:disabled):hover { background: #e7eef6; }
 .chart-legend { font-size: 12px; color: var(--muted); }
-.chart-support-note { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; margin: 2px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.chart-support-note { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .chart-support-note .chart-no-data { white-space: nowrap; }
 .chart-svg text, .reading-value { font-family: Inter, sans-serif; font-variant-numeric: tabular-nums; }
 .reading-control { padding-block: 5px 10px; }
@@ -726,6 +734,13 @@ tr:last-child td { border-bottom: 0; }
 
 /* Let enlarged text reflow without hiding navigation, dates, or input values. */
 .app-nav button, .app-nav a { white-space: normal; overflow-wrap: anywhere; text-align: center; }
+@media (max-width: 700px) {
+  .app-nav { width: 100%; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr)); gap: 4px; margin-block: 6px; }
+  .app-nav button, .app-nav a { min-height: 44px; padding: 8px 6px; font-size: 14px; line-height: 1.35; overflow: visible; text-overflow: clip; }
+  .simple-shell main { padding-top: 16px; }
+  .responsive-page-title { margin-bottom: 0; }
+  .responsive-page-title > h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+}
 .day-headings span { white-space: normal; overflow: visible; padding-right: 4px; overflow-wrap: anywhere; }
 .field input, .field select { height: auto; min-height: 42px; }
 .catalog-item > .field select, .selected-date input, .search-input input { height: auto; }
@@ -761,7 +776,7 @@ tr:last-child td { border-bottom: 0; }
 }
 
 /* Align the main name, dose colors and strength; reserve a separate brand row. */
-.chart-legend { align-items: flex-start; }
+.chart-legend { align-items: flex-start; justify-content: center; margin: 4px 0 2px; }
 .chart-legend .legend-medication { display: inline-grid; grid-template-columns: 17px minmax(0, 1fr) max-content; align-items: center; gap: 3px 6px; min-width: 0; max-width: 100%; }
 .chart-legend .legend-swatches { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 5px; }
 .chart-legend .legend-swatches i { width: 17px; min-height: 2px; }
@@ -769,13 +784,19 @@ tr:last-child td { border-bottom: 0; }
 .chart-legend .medication-title { grid-column: 2; grid-row: 1; min-width: 0; overflow-wrap: anywhere; }
 .chart-legend .medication-name .medication-brand { grid-column: 2; grid-row: 2; margin: 0; }
 .chart-legend .legend-strength { grid-column: 3; grid-row: 1; max-width: 14ch; overflow-wrap: anywhere; }
-.reading-control { justify-content: center; gap: 10px 20px; }
-.reading-values { display: flex; flex: 0 1 auto; justify-content: center; align-items: flex-start; gap: 12px 22px; flex-wrap: wrap; min-width: 0; max-width: 100%; border-inline-start: 1px solid var(--border); padding-inline-start: 20px; }
-.reading-values .reading-value { display: flex; flex-direction: column; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
+.reading-control { justify-content: flex-start; gap: 6px 14px; min-height: 36px; padding-block: 0 6px; }
+.reading-values { display: flex; flex: 0 1 auto; justify-content: flex-start; align-items: flex-start; gap: 8px 16px; flex-wrap: wrap; min-width: 0; max-width: 100%; border-inline-start: 1px solid var(--border); padding-inline-start: 14px; }
+.reading-values .reading-value { display: flex; flex-direction: column; max-width: 100%; text-align: left; line-height: 1.35; overflow-wrap: anywhere; }
 .reading-values .reading-value strong { font-size: 24px; font-weight: 600; letter-spacing: -.5px; }
 .reading-values .reading-value small { font-size: 12px; color: var(--muted); }
 .chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
-.reading-control .reading-time { font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+.reading-control .reading-time { flex: 0 0 auto; font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) {
+  .chart-heading { flex-wrap: wrap; margin-bottom: 8px; }
+  .chart-heading-meta { flex: 1 1 100%; flex-direction: row; justify-content: space-between; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; text-align: left; }
+  .reading-control { gap: 6px 10px; }
+  .reading-values { gap: 6px 12px; padding-inline-start: 10px; }
+}
 .row-state .button.add-record:not(:disabled) { background: #16834a; border-color: #16834a; color: #fff; }
 .row-state .button.add-record:not(:disabled):hover { background: #126c3d; border-color: #126c3d; }
 .planned-row .row-state { padding-bottom: 12px; }
@@ -786,3 +807,47 @@ tr:last-child td { border-bottom: 0; }
 .inventory-medication > .medication-brand { display: block; margin-top: 3px; font-size: 11px; font-weight: 400; font-style: italic; color: var(--muted); line-height: 1.4; }
 .inventory-row > span { min-width: 0; }
 @media (max-width: 700px) { .dose-actions.only-add { display: none; } }
+
+.legal-acceptance { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.legal-acceptance input { flex: 0 0 auto; width: 18px; height: 18px; margin: 2px 0 0; }
+.legal-acceptance a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+.footer-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-left: auto; }
+@media (max-width: 700px) { .footer-links { margin-left: 0; } }
+
+.security-actions{display:flex;flex-wrap:wrap;gap:10px;padding-block:6px 12px;}
+
+.policy-update{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:16px;color:var(--muted);font-size:.875rem}.policy-update p{margin:0;flex:1}.policy-update .icon-button{flex-shrink:0}
+
+/* Reading controls and context share one aligned, compact footer. */
+.chart-footer { margin-inline: -24px; border-top: 1px solid var(--border); }
+.chart-footer-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 20px; padding:10px 24px; }
+.chart-footer-bar .chart-readings-toggle { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; padding:0; min-height:36px; color:var(--muted); font-size:12px; }
+.chart-footer-bar .simulation-notice { flex:1 1 260px; margin:0; padding:0; border:0; text-align:right; }
+.chart-footer .chart-details { border-top:1px solid var(--border); }
+.chart-footer .chart-details[hidden] { display:none; }
+@media(max-width:700px) {
+  .chart-footer { margin-inline:-14px; }
+  .chart-footer-bar { padding:8px 14px; gap:2px 12px; }
+  .chart-footer-bar .chart-readings-toggle { min-height:40px; }
+}
+
+/* Keep the selected reading together on the right, with breathing room below. */
+.chart-summary { display:flex; align-items:flex-start; justify-content:space-between; gap:16px 28px; flex-wrap:wrap; padding:12px 0 22px; }
+.chart-summary .chart-status-legend { margin:0; padding-top:5px; flex:1 1 210px; }
+.chart-summary .reading-control { justify-content:flex-end; margin-left:auto; padding:0; gap:8px 14px; }
+.chart-legend { margin-top:10px; margin-bottom:4px; }
+.chart-reference-note { margin:8px 0 2px; color:var(--muted); font-size:12px; line-height:1.5; text-align:center; }
+.inventory-actions { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 0 4px; border-top:1px solid var(--border); }
+.inventory-actions .inventory-add { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:10px 18px; background:#0071e3; border-color:#0071e3; }
+.inventory-actions .inventory-add:hover { background:#0062c6; border-color:#0062c6; }
+.inventory-history-toggle { margin-left:auto; padding-inline:0; text-align:right; color:var(--muted); }
+.supply-entry[hidden], .inventory-history[hidden] { display:none; }
+.inventory-history { margin-top:18px; }
+@media(max-width:700px) {
+  .chart-summary { gap:12px 18px; padding:10px 0 18px; }
+  .chart-summary .reading-control { max-width:100%; }
+  .inventory-actions { gap:12px; }
+}
+
+.app-loading { max-width:1100px; margin:48px auto; padding:24px; color:var(--muted); }

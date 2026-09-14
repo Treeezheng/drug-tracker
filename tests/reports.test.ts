@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReportPdf, csvString, filterDoses, parseBackup, summarize } from '../src/lib/reports';
+import { buildReportPdf, csvString, filterDoses, parseBackup, readBackupFile, saveReportWhenReady, summarize } from '../src/lib/reports';
 import type { AppData, Dose, Profile } from '../src/lib/types';
 
 const profile: Profile = {
@@ -14,6 +14,37 @@ const dose = (id: string, patch: Partial<Dose> = {}): Dose => ({
 });
 const data = (): AppData => ({ profile: { ...profile }, doses: [dose('dose-1')], scenarios: [], favorites: [], checkins: [] });
 const backup = (value: AppData) => JSON.stringify({ format: 'dose-timeline-backup', schemaVersion: 1, exportedAt: '2026-09-14T20:00:00Z', data: value });
+
+test('oversized backup files reject before reading; accepted files still validate actual UTF-8 bytes', async () => {
+  let reads = 0;
+  await assert.rejects(readBackupFile({ size: 16_000_001, text: async () => { reads++; return backup(data()); } }), /too large/);
+  assert.equal(reads, 0);
+  const original = data(), source = backup(original);
+  assert.deepEqual((await readBackupFile({ size: new TextEncoder().encode(source).byteLength, text: async () => source })).data, original);
+  await assert.rejects(readBackupFile({ size: 1, text: async () => '中'.repeat(5_333_334) }), /too large/);
+});
+
+test('canceling a delayed PDF ends the export before its result arrives and never downloads it', async () => {
+  let resolve!: (pdf: { save(): void }) => void, downloads = 0;
+  const delayed = new Promise<{ save(): void }>(done => { resolve = done; });
+  const controller = new AbortController();
+  const exporting = saveReportWhenReady(delayed, 'synthetic.pdf', controller.signal);
+  controller.abort();
+  await assert.rejects(exporting, error => error instanceof DOMException && error.name === 'AbortError');
+  resolve({ save() { downloads++; } });
+  await Promise.resolve();
+  assert.equal(downloads, 0);
+  await saveReportWhenReady(Promise.resolve({ save() { downloads++; } }), 'synthetic.pdf', new AbortController().signal);
+  assert.equal(downloads, 1);
+});
+
+test('canceling real PDF preparation prevents delivery and a pre-canceled export never starts', async () => {
+  const controller = new AbortController();
+  const preparing = buildReportPdf([dose('private')], profile, '2026-09-01', '2026-09-30', 0, controller.signal);
+  controller.abort();
+  await assert.rejects(preparing, error => error instanceof DOMException && error.name === 'AbortError');
+  await assert.rejects(buildReportPdf([], profile, '2026-09-01', '2026-09-30', 0, controller.signal), /canceled/);
+});
 
 test('report filtering is actual-only and includes the full chosen local calendar dates', () => {
   const rows = [

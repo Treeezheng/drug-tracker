@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scryptSync } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -37,10 +37,11 @@ async function fixture(t, options = {}) {
   const { prepareDatabase, skipBootstrap, ...serverOptions } = options;
   const dir = await mkdtemp(join(tmpdir(), 'drug-cloud-api-')), dbPath = join(dir, 'cloud-only.sqlite');
   const setup = prepareDatabase ? await prepareDatabase(dbPath) : skipBootstrap ? { user: null } : await bootstrapCloudAccount({ dbPath, ...credentials });
+  if (setup.user) setup.user = { ...setup.user, username: credentials.username, authMode: 'legacy-scrypt' };
   let instance;
   const origin = serverOptions.origin ?? ORIGIN;
   const start = async () => {
-    instance = await createCloudServer({ dbPath, origin, ...serverOptions });
+    instance = await createCloudServer({ dbPath, origin, allowLegacyRegistration: true, ...serverOptions });
     await new Promise((accept, reject) => { instance.server.once('error', reject); instance.server.listen(0, '127.0.0.1', accept); });
   };
   const stop = async () => {
@@ -160,7 +161,7 @@ test('production authentication has scoped Secure cookies, private responses and
   for (const [path, method] of [
     ['/auth/recover', 'POST'], ['/auth/local-setup', 'POST'], ['/auth/local-state', 'GET'],
     ['/data', 'GET'], ['/export', 'GET'], ['/import', 'POST'], ['/profile', 'PUT'], ['/doses/record', 'PUT'],
-    ['/checkins/record', 'PUT'], ['/inventory/record', 'PUT'], ['/account', 'DELETE'], ['/api/session', 'GET'],
+    ['/checkins/record', 'PUT'], ['/inventory/record', 'PUT'], ['/api/session', 'GET'],
   ]) assert.equal((await f.request(path, { method, cookie: signed.cookie, owner: f.user.id, ...(['GET', 'HEAD'].includes(method) ? {} : { body: { note: NOTE } }) })).status, 404, path);
   const db = new DatabaseSync(f.dbPath);
   const session = db.prepare('SELECT * FROM cloud_sessions').get();
@@ -298,6 +299,7 @@ test('only an explicit cloud build is served under /drug with no traversal or lo
   }
   await writeFile(join(distDir, 'index.html'), cloudHtml);
   await writeFile(join(distDir, 'privacy.html'), '<!doctype html><title>Privacy fixture</title><p>Static disclosure</p>');
+  await writeFile(join(distDir, 'terms.html'), '<!doctype html><title>Terms fixture</title><p>Static terms</p>');
   await writeFile(join(distDir, 'local.html'), '<!doctype html><title>Other HTML must not be served</title>');
   await writeFile(join(distDir, 'assets', 'app.js'), '/* synthetic asset */');
   await writeFile(join(dir, 'private.txt'), NOTE);
@@ -311,11 +313,17 @@ test('only an explicit cloud build is served under /drug with no traversal or lo
   assert.equal(disclosure.status, 200);
   assert.ok(disclosure.data.includes('Static disclosure'));
   assert.ok(disclosure.headers.get('content-security-policy').includes("script-src 'none'"));
+  const terms = await f.request('/drug/terms.html');
+  assert.equal(terms.status, 200);
+  assert.ok(terms.data.includes('Static terms'));
+  assert.ok(terms.headers.get('content-security-policy').includes("script-src 'none'"));
   for (const path of ['/drug/assets/missing.js', '/drug/private.txt', '/drug/local.html', '/drug/%2e%2e/private.txt', '/drug/api/no-such-route']) assert.equal((await f.request(path)).status, 404);
   await writeFile(join(distDir, 'index.html'), '<meta name="drug-edition" content="local">');
   await writeFile(join(distDir, 'privacy.html'), '<p>A replaced document must not replace the verified startup snapshot.</p>');
+  await writeFile(join(distDir, 'terms.html'), '<p>Changed terms after server startup.</p>');
   assert.equal((await f.request('/drug/')).data, cloudHtml, 'The server must keep serving its edition-checked HTML snapshot.');
   assert.equal((await f.request('/drug/privacy.html')).data, disclosure.data);
+  assert.equal((await f.request('/drug/terms.html')).data, terms.data);
 });
 
 test('HTTP cookies are available only for explicitly enabled exact loopback development origins', async t => {
@@ -335,7 +343,9 @@ test('public registration creates durable separate accounts and sessions without
   const first = await f.request('/auth/register', { method: 'POST', body: { username: 'First_User', password: PASSWORD, name: 'Synthetic first' } });
   assert.equal(first.status, 201);
   const a = first.data.user;
-  assert.deepEqual(Object.keys(a).sort(), ['id', 'name']);
+  assert.deepEqual(Object.keys(a).sort(), ['authMode', 'id', 'name', 'username']);
+  assert.equal(a.authMode, 'legacy-scrypt');
+  assert.equal(a.username, 'first_user');
   assert.equal(a.name, 'Synthetic first');
   for (const part of ['Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/drug/']) assert.ok(first.headers.get('set-cookie').includes(part));
   assert.deepEqual((await f.request('/vault', { cookie: first.cookie, owner: a.id })).data, { vault: null });
@@ -420,8 +430,8 @@ async function legacyDatabase(dbPath, orphan = false) {
   const account = db.prepare('SELECT * FROM cloud_accounts').get();
   if (orphan) db.exec('PRAGMA foreign_keys=OFF');
   const token = randomBytes(32).toString('base64url');
-  const session = { token_hash: createHash('sha256').update(token).digest('hex'), owner_id: orphan ? 'missing-owner' : account.id, expires_at: Date.now() + 86400_000, created_at: '2026-09-13T08:00:00Z' };
-  db.exec(`DROP TABLE cloud_sessions; DROP TABLE cloud_accounts;
+  const session = { token_hash: createHash('sha256').update(token).digest('hex'), owner_id: orphan ? 'missing-owner' : account.id, expires_at: Date.now() + 86400_000, created_at: new Date().toISOString() };
+  db.exec(`DROP TABLE cloud_auth_challenges; DROP TABLE cloud_auth_secrets; DROP TABLE cloud_sessions; DROP TABLE cloud_accounts;
     CREATE TABLE cloud_accounts (singleton INTEGER PRIMARY KEY CHECK(singleton=1), id TEXT NOT NULL UNIQUE, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
     CREATE TABLE cloud_sessions (token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL, created_at TEXT NOT NULL) STRICT;
     UPDATE cloud_meta SET version=1 WHERE singleton=1;`);
@@ -459,7 +469,7 @@ test('concurrent v1-to-v2 migrations preserve the original owner, hash, session 
   assert.equal(registered.status, 201);
   assert.notEqual(registered.data.user.id, original.user.id);
   const db = new DatabaseSync(f.dbPath);
-  assert.equal(db.prepare('SELECT version FROM cloud_meta').get().version, 2);
+  assert.equal(db.prepare('SELECT version FROM cloud_meta').get().version, 3);
   assert.deepEqual(db.prepare('SELECT * FROM cloud_accounts WHERE id=?').get(original.user.id), original.account);
   assert.deepEqual(db.prepare('SELECT * FROM cloud_sessions WHERE token_hash=?').get(original.session.token_hash), Object.assign(Object.create(null), original.session));
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
@@ -481,4 +491,202 @@ test('a failed legacy migration rolls back all table and version changes instead
   assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%_v2'").all(), []);
   assert.equal(db.prepare('SELECT revision FROM encrypted_vaults WHERE owner_id=?').get(original.user.id).revision, original.vault.revision);
   db.close();
+});
+
+async function pausedVaultWrite(f, signed, input) {
+  const data = JSON.stringify(input);
+  let incoming;
+  f.server.once('request', req => { incoming = req; });
+  let request;
+  const completed = new Promise((resolve, reject) => {
+    request = httpRequest({ hostname: '127.0.0.1', port: f.server.address().port, path: '/drug/api/vault', method: 'PUT', headers: {
+      Host: 'treeezh.com', Origin: ORIGIN, Cookie: signed.cookie, 'X-Dose-Owner': signed.owner,
+      'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data),
+    } }, response => { response.resume(); response.once('end', () => resolve(response.statusCode)); });
+    request.once('error', reject); request.write(data.slice(0, 1));
+  });
+  for (let i=0; i<100 && !incoming?.listenerCount('data'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(incoming?.listenerCount('data'), 'the body parser has admitted the paused upload');
+  return { finish: () => request.end(data.slice(1)), abort: () => request.destroy(), completed };
+}
+
+test('malformed auth does not spend valid-account quotas, and exhausting A never locks B', async t => {
+  const f = await fixture(t, { loginAttemptLimit: 2 });
+  const other = await f.request('/auth/register', { method: 'POST', body: { username: 'synthetic_second', password: PASSWORD } });
+  assert.equal(other.status, 201);
+  for (let i=0; i<35; i++) assert.equal((await f.request('/auth/login', { method: 'POST', rawBody: '{' })).status, 400);
+  for (let i=0; i<2; i++) assert.equal((await f.request('/auth/login', { method: 'POST', body: { ...credentials, password: 'synthetic wrong' } })).status, 401);
+  assert.equal((await login(f)).status, 429);
+  assert.equal((await f.request('/auth/login', { method: 'POST', body: { username: 'SYNTHETIC_SECOND', password: PASSWORD } })).status, 200);
+});
+
+test('Heroku registration quotas use only the router-appended final valid IP; missing or invalid sources fail closed', async t => {
+  const f = await fixture(t, { proxyMode: 'heroku', registrationAttemptLimit: 1 });
+  const register = username => ({ username, password: PASSWORD });
+  const headers = address => ({ 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': address });
+  assert.equal((await f.request('/auth/register', { method: 'POST', body: register('first_ip'), headers: headers('198.51.100.1, 192.0.2.1') })).status, 201);
+  assert.equal((await f.request('/auth/register', { method: 'POST', body: register('spoofed_ip'), headers: headers('198.51.100.2, 192.0.2.1') })).status, 429);
+  assert.equal((await f.request('/auth/register', { method: 'POST', body: register('second_ip'), headers: headers('198.51.100.1, 192.0.2.2') })).status, 201);
+  for (const hdr of [{ 'X-Forwarded-Proto': 'https' }, headers('192.0.2.9, invalid'), headers('192.0.2.9,')]) {
+    assert.equal((await f.request('/auth/register', { method: 'POST', body: register('bad_source'), headers: hdr })).status, 400);
+  }
+  assert.equal((await f.request('/auth/register', { method: 'POST', body: register('ipv6_first'), headers: headers('2001:0db8:0:0:0:0:0:1') })).status, 201);
+  assert.equal((await f.request('/auth/register', { method: 'POST', body: register('ipv6_spelling'), headers: headers('2001:db8::1') })).status, 429);
+});
+
+test('vault admission budget rejects parallel uploads then releases after bad JSON and connection abort', async t => {
+  const f = await fixture(t), logged = await login(f), signed = { cookie: logged.cookie, owner: f.user.id };
+  const paused = await pausedVaultWrite(f, signed, opaque(f.user.id));
+  const busy = await f.request('/vault', { ...signed, method: 'PUT', body: opaque(f.user.id) });
+  assert.equal(busy.status, 429); assert.equal(busy.headers.get('retry-after'), '1');
+  paused.finish(); assert.equal(await paused.completed, 200);
+  assert.equal((await f.request('/vault', signed)).status, 200);
+  assert.equal((await f.request('/vault', { ...signed, method: 'PUT', rawBody: '{' })).status, 400);
+  assert.equal((await f.request('/vault', signed)).status, 200);
+  const aborted = await pausedVaultWrite(f, signed, opaque(f.user.id, 1));
+  const stopped = aborted.completed.catch(error => error.code);
+  aborted.abort(); await stopped;
+  let restored;
+  for (let i=0; i<100; i++) { restored = await f.request('/vault', signed); if (restored.status !== 429) break; await new Promise(resolve => setTimeout(resolve, 5)); }
+  assert.equal(restored.status, 200); assert.equal(restored.data.vault.revision, 1);
+});
+
+test('cloud deletion needs fresh password and owner, rolls back on storage failure, and revokes all sessions without touching another account', async t => {
+  const f = await fixture(t), first = await login(f), second = await login(f), signed = { cookie: first.cookie, owner: f.user.id };
+  const other = await f.request('/auth/register', { method: 'POST', body: { username: 'retained_synthetic', password: PASSWORD } });
+  const foreign = { cookie: other.cookie, owner: other.data.user.id };
+  assert.equal((await f.request('/vault', { ...signed, method: 'PUT', body: opaque(signed.owner) })).status, 200);
+  assert.equal((await f.request('/vault', { ...foreign, method: 'PUT', body: opaque(foreign.owner) })).status, 200);
+  const deletion = { ...signed, method: 'DELETE', body: { password: PASSWORD } };
+  assert.equal((await f.request('/account', { ...deletion, body: { password: 'synthetic wrong' } })).status, 403);
+  assert.equal((await f.request('/account', { ...deletion, owner: foreign.owner })).status, 401);
+  assert.equal((await f.request('/account', { ...deletion, noOrigin: true })).status, 403);
+  assert.equal((await f.request('/account', { ...deletion, body: { password: PASSWORD, owner: foreign.owner } })).status, 400);
+  const db = new DatabaseSync(f.dbPath);
+  db.exec("CREATE TRIGGER synthetic_abort_delete BEFORE DELETE ON cloud_accounts BEGIN SELECT RAISE(ABORT, 'synthetic rollback only'); END");
+  assert.equal((await f.request('/account', deletion)).status, 500);
+  assert.equal((await f.request('/vault', signed)).data.vault.revision, 1);
+  db.exec('DROP TRIGGER synthetic_abort_delete'); db.close();
+  const paused = await pausedVaultWrite(f, signed, opaque(signed.owner, 1));
+  const deleted = await f.request('/account', deletion);
+  assert.equal(deleted.status, 200); assert.deepEqual(deleted.data, { ok: true });
+  assert.ok(deleted.headers.get('set-cookie').includes('Max-Age=0'));
+  paused.finish(); assert.equal(await paused.completed, 401);
+  for (const cookie of [first.cookie, second.cookie]) {
+    assert.deepEqual((await f.request('/session', { cookie })).data, { user: null });
+    assert.equal((await f.request('/vault', { cookie, owner: signed.owner })).status, 401);
+  }
+  assert.equal((await login(f)).status, 401);
+  assert.equal((await f.request('/vault', foreign)).data.vault.revision, 1);
+  await f.stop(); await f.start();
+  assert.equal((await f.request('/vault', foreign)).data.vault.revision, 1);
+  const after = new DatabaseSync(f.dbPath);
+  for (const [table, column] of [['cloud_accounts','id'], ['cloud_sessions','owner_id'], ['encrypted_vaults','owner_id']]) assert.equal(after.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column}=?`).get(signed.owner).n, 0);
+  after.close();
+});
+
+const NEW_PASSWORD = 'SYNTHETIC! glacier orbit fern 8294';
+test('24-hour cloud sessions expose minimal owner-bound metadata and fresh-password changes revoke every old cookie while keeping the vault', async t => {
+  const f = await fixture(t), first = await login(f), second = await login(f), signed = {cookie:first.cookie,owner:f.user.id};
+  assert.match(first.headers.get('set-cookie'), /Max-Age=86400(?:;|$)/);
+  const other = await f.request('/auth/register',{method:'POST',body:{username:'security_other',password:PASSWORD}});
+  const foreign = {cookie:other.cookie,owner:other.data.user.id};
+  const saved = await f.request('/vault',{...signed,method:'PUT',body:opaque(signed.owner)});
+  const details = await f.request('/security',signed);
+  assert.equal(details.status,200);
+  assert.deepEqual(Object.keys(details.data.security).sort(),['activeSessionCount','currentSession','sessionLifetimeHours']);
+  assert.deepEqual(Object.keys(details.data.security.currentSession).sort(),['createdAt','expiresAt']);
+  assert.equal(details.data.security.activeSessionCount,2);assert.equal(details.data.security.sessionLifetimeHours,24);
+  const lifetime=Date.parse(details.data.security.currentSession.expiresAt)-Date.parse(details.data.security.currentSession.createdAt);
+  assert.ok(lifetime>86390_000&&lifetime<=86400_000);
+  assert.equal((await f.request('/security',{...signed,owner:foreign.owner})).status,401);
+  assert.equal((await f.request('/security',{owner:signed.owner})).status,401);
+  const confirmed=await f.request('/auth/verify-password',{...signed,method:'POST',body:{password:PASSWORD}});
+  assert.equal(confirmed.status,200);assert.deepEqual(confirmed.data,{ok:true});assert.equal(confirmed.headers.get('set-cookie'),null);
+  assert.deepEqual((await f.request('/security',signed)).data,details.data);
+  assert.equal((await f.request('/auth/verify-password',{...signed,method:'POST',body:{password:'synthetic wrong'}})).status,403);
+  const change={...signed,method:'POST',body:{currentPassword:PASSWORD,newPassword:NEW_PASSWORD}};
+  assert.equal((await f.request('/auth/change-password',{...change,body:{...change.body,currentPassword:'synthetic wrong'}})).status,403);
+  assert.equal((await f.request('/auth/change-password',{...change,body:{...change.body,newPassword:'password1234567890'}})).status,400);
+  assert.equal((await f.request('/auth/change-password',{...change,body:{...change.body,newPassword:PASSWORD}})).status,400);
+  assert.equal((await f.request('/auth/change-password',{...change,noOrigin:true})).status,403);
+  assert.equal((await f.request('/auth/logout-all',{...signed,method:'POST',body:{password:'synthetic wrong'}})).status,403);
+  const db=new DatabaseSync(f.dbPath);
+  db.exec("CREATE TRIGGER synthetic_abort_session BEFORE INSERT ON cloud_sessions BEGIN SELECT RAISE(ABORT, 'synthetic rollback only'); END");
+  assert.equal((await f.request('/auth/change-password',change)).status,500);
+  assert.equal((await f.request('/security',signed)).data.security.activeSessionCount,2);
+  db.exec('DROP TRIGGER synthetic_abort_session');db.close();
+  const changed=await f.request('/auth/change-password',change);
+  assert.equal(changed.status,200);assert.deepEqual(changed.data.user,f.user);
+  assert.notEqual(changed.cookie,first.cookie);assert.notEqual(changed.cookie,second.cookie);
+  assert.equal(changed.data.security.activeSessionCount,1);
+  const fresh={cookie:changed.cookie,owner:signed.owner};
+  assert.deepEqual((await f.request('/vault',fresh)).data,saved.data);
+  for(const cookie of [first.cookie,second.cookie])assert.deepEqual((await f.request('/session',{cookie})).data,{user:null});
+  assert.equal((await login(f)).status,401);
+  const another=await f.request('/auth/login',{method:'POST',body:{username:USERNAME,password:NEW_PASSWORD}});
+  assert.equal(another.status,200);
+  const exited=await f.request('/auth/logout-all',{...fresh,method:'POST',body:{password:NEW_PASSWORD}});
+  assert.equal(exited.status,200);assert.deepEqual(exited.data,{ok:true});assert.match(exited.headers.get('set-cookie'),/Max-Age=0/);
+  for(const cookie of [changed.cookie,another.cookie])assert.deepEqual((await f.request('/session',{cookie})).data,{user:null});
+  assert.deepEqual((await f.request('/session',foreign)).data,{user:other.data.user});
+  const reentered=await f.request('/auth/login',{method:'POST',body:{username:USERNAME,password:NEW_PASSWORD}});
+  await f.stop();await f.start();
+  assert.deepEqual((await f.request('/vault',{cookie:reentered.cookie,owner:signed.owner})).data,saved.data);
+});
+
+test('new account security routes share the owner attempt quota and legacy long sessions are capped without rolling extension', async t => {
+  const f=await fixture(t,{loginAttemptLimit:2}), first=await login(f), signed={cookie:first.cookie,owner:f.user.id};
+  assert.equal((await f.request('/auth/logout-all',{...signed,method:'POST',body:{password:'synthetic wrong'}})).status,403);
+  const denied=await f.request('/auth/change-password',{...signed,method:'POST',body:{currentPassword:PASSWORD,newPassword:NEW_PASSWORD}});
+  assert.equal(denied.status,429);assert.ok(Number(denied.headers.get('retry-after'))>0);
+  const other=await fixture(t), logged=await login(other);
+  const db=new DatabaseSync(other.dbPath), created=new Date(Date.now()-2*86400_000).toISOString();
+  db.prepare('UPDATE cloud_sessions SET created_at=?,expires_at=?').run(created,Date.now()+28*86400_000);db.close();
+  await other.stop();await other.start();
+  assert.deepEqual((await other.request('/session',{cookie:logged.cookie})).data,{user:null});
+  const check=new DatabaseSync(other.dbPath);
+  const expires=check.prepare('SELECT expires_at FROM cloud_sessions').get().expires_at;
+  assert.equal(expires,Date.parse(created)+86400_000);check.close();
+  await other.stop();await other.start();
+  const again=new DatabaseSync(other.dbPath);assert.equal(again.prepare('SELECT expires_at FROM cloud_sessions').get().expires_at,expires);again.close();
+  assert.equal((await login(other)).status,200);
+});
+
+test('cloud CSP permits only the WASM compilation needed by Argon2 and security request bodies reject vault secrets', async t => {
+  const f=await fixture(t), logged=await login(f), signed={cookie:logged.cookie,owner:f.user.id};
+  const csp=logged.headers.get('content-security-policy');
+  assert.ok(csp.includes("script-src 'self' 'wasm-unsafe-eval'"));assert.ok(!csp.includes("'unsafe-eval'"));
+  for(const path of ['/auth/logout-all','/auth/change-password','/auth/verify-password']) {
+    assert.equal((await f.request(path,{...signed,method:'POST',body:{password:PASSWORD,vaultPassphrase:'never accept this'}})).status,400);
+    assert.equal((await f.request(path,{...signed,method:'POST',body:{password:PASSWORD},owner:'wrong-owner'})).status,401);
+  }
+  assert.equal((await f.request('/auth/register',{method:'POST',body:{username:'weak_synthetic',password:'password1234567890'}})).status,400);
+});
+
+test('an existing weak legacy account can still sign in, verify and replace its password under the stronger new-password policy', async t => {
+  const f=await fixture(t), legacy='password1234', salt='22'.repeat(16);
+  const key=scryptSync(legacy,salt,64,{N:32768,r:8,p:1,maxmem:64*1024*1024}).toString('hex');
+  const db=new DatabaseSync(f.dbPath);
+  db.prepare('UPDATE cloud_accounts SET password_hash=? WHERE id=?').run(`scrypt$32768$8$1$${salt}$${key}`,f.user.id);db.close();
+  const signed=await f.request('/auth/login',{method:'POST',body:{username:USERNAME,password:legacy}});
+  assert.equal(signed.status,200);
+  const owner={cookie:signed.cookie,owner:f.user.id};
+  assert.equal((await f.request('/auth/verify-password',{...owner,method:'POST',body:{password:legacy}})).status,200);
+  const changed=await f.request('/auth/change-password',{...owner,method:'POST',body:{currentPassword:legacy,newPassword:NEW_PASSWORD}});
+  assert.equal(changed.status,200);
+  assert.equal((await f.request('/auth/login',{method:'POST',body:{username:USERNAME,password:legacy}})).status,401);
+  assert.equal((await f.request('/auth/login',{method:'POST',body:{username:USERNAME,password:NEW_PASSWORD}})).status,200);
+});
+
+test('well-formed weak passwords consume source or account quotas before strength evaluation can be repeated', async t => {
+  const f=await fixture(t,{registrationAttemptLimit:1,loginAttemptLimit:2});
+  const weak={username:'weak_quota_synthetic',password:'password1234567890'};
+  assert.equal((await f.request('/auth/register',{method:'POST',body:weak})).status,400);
+  assert.equal((await f.request('/auth/register',{method:'POST',body:{...weak,password:PASSWORD}})).status,429);
+  const signed=await login(f);assert.equal(signed.status,200);
+  const request={cookie:signed.cookie,owner:f.user.id,method:'POST',body:{currentPassword:PASSWORD,newPassword:'password1234567890'}};
+  assert.equal((await f.request('/auth/change-password',request)).status,400);
+  assert.equal((await f.request('/auth/change-password',{...request,body:{...request.body,newPassword:NEW_PASSWORD}})).status,429);
+  assert.deepEqual((await f.request('/session',{cookie:signed.cookie})).data,{user:f.user});
 });

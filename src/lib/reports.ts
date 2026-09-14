@@ -170,12 +170,27 @@ export function downloadCsv(doses: Dose[], profile: Profile, from: string, to: s
   download(new Blob(['\uFEFF', csvString(doses, profile, from, to, checkins)], { type: 'text/csv;charset=utf-8' }), `dose-timeline-${from}-to-${to}.csv`);
 }
 
+function reportCanceled(): DOMException { return new DOMException('Report export canceled.', 'AbortError'); }
+function waitForReport<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const cancel = () => { signal.removeEventListener('abort', cancel); reject(reportCanceled()); };
+    if (signal.aborted) cancel();
+    else signal.addEventListener('abort', cancel, { once: true });
+    // Handle the losing promise too: a delayed module load must not retain an
+    // export's waiting frame or cause an unhandled rejection after cancellation.
+    pending.then(value => { signal.removeEventListener('abort', cancel); if (signal.aborted) reject(reportCanceled()); else resolve(value); }, error => { signal.removeEventListener('abort', cancel); reject(error); });
+  });
+}
+
 /** Exported separately to verify pagination without starting a browser download. */
-export async function buildReportPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number) {
+export async function buildReportPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw reportCanceled();
   if (!Number.isSafeInteger(unsynced) || unsynced < 0) throw new Error('Invalid pending-change count. Refresh the records before exporting.');
+  const { jsPDF } = await waitForReport(import('jspdf'), signal);
+  if (signal?.aborted) throw reportCanceled();
   const selected = filterDoses(doses, from, to, profile.timeZone);
   const summary = summarize(selected, profile.timeZone);
-  const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ unit: 'mm', format: 'letter', compress: true, putOnlyUsedFonts: true });
   pdf.setProperties({ title: 'Dose Timeline - medication record', subject: `Actual administration records ${from} to ${to}`, creator: 'Dose Timeline' });
   const margin = 17;
@@ -308,9 +323,14 @@ export async function buildReportPdf(doses: Dose[], profile: Profile, from: stri
   return pdf;
 }
 
-export async function downloadPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number): Promise<void> {
-  const pdf = await buildReportPdf(doses, profile, from, to, unsynced);
-  await pdf.save(`dose-timeline-${from}-to-${to}.pdf`, { returnPromise: true });
+/** The same cancellation gate applies to delayed generation and the final download. */
+export async function saveReportWhenReady(pending: Promise<{ save(filename: string, options: { returnPromise: true }): unknown }>, filename: string, signal?: AbortSignal): Promise<void> {
+  const pdf = await waitForReport(pending, signal);
+  if (signal?.aborted) throw reportCanceled();
+  await pdf.save(filename, { returnPromise: true });
+}
+export function downloadPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number, signal?: AbortSignal): Promise<void> {
+  return saveReportWhenReady(buildReportPdf(doses, profile, from, to, unsynced, signal), `dose-timeline-${from}-to-${to}.pdf`, signal);
 }
 
 export function downloadJson(data: AppData): void {
@@ -454,6 +474,13 @@ function validateCheckin(checkin: RecordObject): void {
 }
 
 /** Validate a versioned backup for preview. This function never writes data. */
+export async function readBackupFile(file: Pick<File, 'size' | 'text'>): Promise<{ data: AppData; archive: unknown }> {
+  if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > 16_000_000) throw new Error('This backup is too large (maximum 16 MB of text).');
+  const source = await file.text();
+  // Validate the decoded UTF-8 bytes as well as the original file size.
+  const data = parseBackup(source);
+  return { data, archive: JSON.parse(source) };
+}
 export function parseBackup(source: string): AppData {
   if (source.length > 16_000_000 || new TextEncoder().encode(source).length > 16_000_000) throw new Error('This backup is too large (maximum 16 MB of text).');
   let parsed: unknown;
@@ -484,6 +511,7 @@ export function parseBackup(source: string): AppData {
     zone(profile.timeZone);
     if (!['12h', '24h'].includes(String(profile.timeFormat))) throw new Error('Invalid profile time format.');
     if (profile.timeIncrementMinutes !== undefined && ![1, 5, 10].includes(profile.timeIncrementMinutes as number)) throw new Error('Choose a 1, 5 or 10 minute time increment.');
+    if (profile.plannedDoseConfirmation !== undefined) boolean(profile.plannedDoseConfirmation, 'Planned dose confirmation');
     boolean(profile.sleepEnabled, 'Sleep enabled');
     boolean(profile.weekendEnabled, 'Weekend enabled');
     for (const field of ['bedtime', 'wakeTime', 'weekendBedtime', 'weekendWakeTime']) clock(profile[field], field, true);

@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { createCloudClient } from '../src/lib/cloud-client';
 import type { CloudVaultSnapshot } from '../src/lib/cloud-client';
 import { ApiError } from '../src/lib/api';
-import { decryptVault, importRecoveryKey } from '../src/lib/vault-crypto';
+import { decryptVault, exportRecoveryKey, importRecoveryKey, unwrapVaultKey } from '../src/lib/vault-crypto';
 import { parseBackup } from '../src/lib/reports';
 import type { AppData, Dose, Profile } from '../src/lib/types';
 import { newDose, updateDose } from '../src/components/DoseEditor';
+import { freshGuestWorkspace } from '../src/lib/guest-workspace';
+import { prepareGuestTransfer } from '../src/lib/guest-transfer';
 
 const passphrase = 'Independent vault phrase 中文';
 const profile: Profile = { name: 'Synthetic 中文', timeZone: 'America/Los_Angeles', timeFormat: '12h', timeIncrementMinutes: 5, sleepEnabled: false, bedtime: '', wakeTime: '', weekendEnabled: false, weekendBedtime: '', weekendWakeTime: '' };
@@ -21,7 +23,7 @@ const archive = (data: AppData) => ({ format: 'dose-timeline-backup', schemaVers
 function deferred<T = void>() { let resolve!: (value: T | PromiseLike<T>) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function server() {
   let vault: CloudVaultSnapshot | null = null;
-  let auth = true, mode: 'none' | 'before' | 'after' | 'badAck' = 'none';
+  let auth = true, mode: 'none' | 'before' | 'after' | 'badAck' = 'none', accountPassword = 'correct-account-password', failReconcile = false, failedReads = 0;
   let hold: { started: ReturnType<typeof deferred>; finish: ReturnType<typeof deferred> } | null = null;
   const requests: { path: string; method: string; init: RequestInit; body?: any }[] = [];
   const reply = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -34,22 +36,150 @@ function server() {
     if (path === '/auth/logout') { auth = false; return reply({ ok: true }); }
     if (!auth) return reply({ error: 'Sign in again.' }, 401);
     assert.equal(new Headers(init.headers).get('X-Dose-Owner'), 'owner1');
-    if (path === '/vault' && method === 'GET') return reply({ vault });
+    if (path === '/auth/verify-password') return reply(body.password === accountPassword ? {ok:true} : {error:'Incorrect account password.'}, body.password === accountPassword ? 200 : 403);
+    if (path === '/auth/change-password') { if(body.currentPassword !== accountPassword)return reply({error:'Incorrect account password.'},403);accountPassword=body.newPassword;return reply({user:{id:'owner1',name:'Account name'},security:{activeSessionCount:1}}); }
+    if (path === '/auth/logout-all') { if(body.password!==accountPassword)return reply({error:'Incorrect account password.'},403);auth=false;return reply({ok:true}); }
+    if (path === '/security') return reply({security:{activeSessionCount:1,sessionLifetimeHours:24,currentSession:{createdAt:'2026-09-13T00:00:00Z',expiresAt:'2026-09-14T00:00:00Z'}}});
+    if (path === '/account' && method === 'DELETE') {
+      if (body.password !== 'correct-account-password') return reply({ error: 'Incorrect account password.' }, 403);
+      auth = false; vault = null; return reply({ ok: true });
+    }
+    if (path === '/vault' && method === 'GET') {if(failedReads>0){failedReads--;throw new TypeError('reconciliation offline');}return reply({ vault });}
     if (path === '/vault' && method === 'PUT') {
       if (mode === 'before') { mode = 'none'; throw new TypeError('offline'); }
       if (body.expectedRevision !== (vault?.revision ?? 0)) return reply({ error: 'Vault changed. Refresh and review your unsaved entry.', currentRevision: vault?.revision ?? 0 }, 409);
       vault = { ownerId: 'owner1', revision: body.expectedRevision + 1, dataEnvelope: body.dataEnvelope, keyEnvelope: body.keyEnvelope, createdAt: vault?.createdAt ?? '2026-09-13T19:00:00Z', updatedAt: '2026-09-13T19:00:00Z' };
       if (hold) { const current = hold; hold = null; current.started.resolve(); await current.finish.promise; }
-      if (mode === 'after') { mode = 'none'; throw new TypeError('dropped acknowledgement'); }
+      if (mode === 'after') { mode = 'none'; if(failReconcile){failedReads++;failReconcile=false;}throw new TypeError('dropped acknowledgement'); }
       if (mode === 'badAck') { mode = 'none'; return reply({ vault: { ...vault, revision: vault.revision + 3 } }); }
       return reply({ vault });
     }
     return reply({ error: 'Unknown route' }, 404);
   }) as typeof fetch;
-  return { fetcher, requests, get vault() { return vault; }, set vault(value) { vault = value; }, fail(value: typeof mode) { mode = value; }, holdNext() { hold = { started: deferred(), finish: deferred() }; return hold; }, expire() { auth = false; } };
+  return { fetcher, requests, get vault() { return vault; }, set vault(value) { vault = value; }, fail(value: typeof mode) { mode = value; }, failAfterAndReconcile(){mode='after';failReconcile=true;}, holdNext() { hold = { started: deferred(), finish: deferred() }; return hold; }, expire() { auth = false; } };
 }
 async function ready(data = empty()) { const remote = server(), client = createCloudClient({ fetch: remote.fetcher }); await client.session(); await client.loadVault(); const setup = await client.setupVault(passphrase, data); return { remote, client, ...setup }; }
 const puts = (remote: ReturnType<typeof server>) => remote.requests.filter(r => r.path === '/vault' && r.method === 'PUT');
+const replacementPassphrase = 'SYNTHETIC! glacier orbit fern 8294';
+const accountPassword = 'correct-account-password';
+
+test('changing encryption password rewraps the original key after both authentications without transmitting encryption secrets', async () => {
+  const {client,remote,recoveryKey}=await ready(complete()), old=structuredClone(remote.vault!);
+  assert.deepEqual(await client.request('/vault/change-password','POST',{currentSecret:passphrase,useRecovery:false,newPassphrase:replacementPassphrase,accountPassword},'owner1'),{recoveryKeyChanged:false});
+  assert.equal(remote.vault!.revision,2);
+  assert.deepEqual(remote.vault!.dataEnvelope,old.dataEnvelope);
+  assert.equal(remote.vault!.keyEnvelope.version,2);
+  assert.equal(await exportRecoveryKey(await unwrapVaultKey(remote.vault!.keyEnvelope,replacementPassphrase,'owner1')),recoveryKey);
+  await assert.rejects(unwrapVaultKey(remote.vault!.keyEnvelope,passphrase,'owner1'));
+  assert.deepEqual(await decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(recoveryKey),'owner1'),complete());
+  // Old copies remain readable: changing the wrapping password cannot revoke backups.
+  assert.deepEqual(await decryptVault(old.dataEnvelope,await unwrapVaultKey(old.keyEnvelope,passphrase,'owner1'),'owner1'),complete());
+  const wire=JSON.stringify(remote.requests);
+  for(const value of [passphrase,replacementPassphrase,recoveryKey,'Private note'])assert.equal(wire.includes(value),false);
+  assert.deepEqual(remote.requests.find(r=>r.path==='/auth/verify-password')!.body,{password:accountPassword});
+  assert.equal(remote.requests.some(r=>r.path==='/vault/change-password'),false);
+});
+
+test('full key rotation revokes the former recovery key for current and future snapshots while preserving every collection', async () => {
+  const {client,remote,recoveryKey}=await ready(complete()), old=structuredClone(remote.vault!);
+  const result=await client.request<{recoveryKey:string}>('/vault/rotate-key','POST',{currentSecret:recoveryKey,useRecovery:true,newPassphrase:replacementPassphrase,accountPassword},'owner1');
+  assert.notEqual(result.recoveryKey,recoveryKey);
+  assert.notEqual(remote.vault!.dataEnvelope.ciphertext,old.dataEnvelope.ciphertext);
+  await assert.rejects(decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(recoveryKey),'owner1'));
+  assert.deepEqual(await decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(result.recoveryKey),'owner1'),complete());
+  await client.request('/doses/dose1','PUT',dose('dose1',{revision:2,note:'Future snapshot'}),'owner1');
+  await assert.rejects(decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(recoveryKey),'owner1'));
+  assert.equal((await decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(result.recoveryKey),'owner1')).doses[0].note,'Future snapshot');
+  assert.deepEqual(await decryptVault(old.dataEnvelope,await importRecoveryKey(recoveryKey),'owner1'),complete());
+  client.lock();
+  assert.equal((await client.unlockVault({vaultPassphrase:replacementPassphrase})).doses[0].note,'Future snapshot');
+});
+
+test('encryption changes reject bad current secrets, bad account authentication, common passwords and account-password reuse before any vault write', async () => {
+  const {client,remote}=await ready(complete()), before=puts(remote).length;
+  await assert.rejects(client.changeVaultPassword({vaultPassphrase:'Wrong encryption phrase'},replacementPassphrase,accountPassword));
+  await assert.rejects(client.rotateVaultKey({recoveryKey:'A'.repeat(43)},replacementPassphrase,accountPassword));
+  await assert.rejects(client.changeVaultPassword({vaultPassphrase:passphrase},replacementPassphrase,'wrong-account-password'),error=>error instanceof ApiError&&error.status===403);
+  const authCount=remote.requests.filter(r=>r.path==='/auth/verify-password').length;
+  await assert.rejects(client.changeVaultPassword({vaultPassphrase:passphrase},'Password123456!',accountPassword),/stronger password/);
+  await assert.rejects(client.changeVaultPassword({vaultPassphrase:passphrase},accountPassword,accountPassword),/different/);
+  assert.equal(remote.requests.filter(r=>r.path==='/auth/verify-password').length,authCount);
+  assert.equal(puts(remote).length,before);
+  assert.deepEqual((await client.request<{data:AppData}>('/export')).data,complete());
+});
+
+test('a lost rotation acknowledgement reconciles exact ciphertext and returns the matching recovery key', async () => {
+  const {client,remote}=await ready(complete());remote.fail('after');
+  const result=await client.rotateVaultKey({vaultPassphrase:passphrase},replacementPassphrase,accountPassword);
+  assert.equal(puts(remote).length,2);
+  assert.equal(client.getState().revision,2);
+  assert.deepEqual(await decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(result.recoveryKey),'owner1'),complete());
+});
+
+test('unconfirmed rotation blocks ordinary writes; retry recovers the same key without another upload or losing confirmed records', async () => {
+  const {client,remote}=await ready(complete());remote.failAfterAndReconcile();
+  await assert.rejects(client.rotateVaultKey({vaultPassphrase:passphrase},replacementPassphrase,accountPassword),/unconfirmed/);
+  const written=structuredClone(remote.vault!);
+  assert.equal(client.getState().revision,1);
+  assert.deepEqual((await client.request<{data:AppData}>('/export')).data,complete());
+  await assert.rejects(client.request('/doses/new','PUT',dose('new')),/unconfirmed encryption/);
+  await assert.rejects(client.rotateVaultKey({vaultPassphrase:passphrase},'Different! asteroid meadow ribbon 8392',accountPassword));
+  const result=await client.rotateVaultKey({vaultPassphrase:passphrase},replacementPassphrase,accountPassword);
+  assert.equal(puts(remote).length,2);
+  assert.deepEqual(remote.vault,written);
+  assert.deepEqual(await decryptVault(written.dataEnvelope,await importRecoveryKey(result.recoveryKey),'owner1'),complete());
+  assert.equal(client.getState().revision,2);
+});
+
+test('a failed pre-upload rotation retries the identical envelope pair and stale device rotation cannot overwrite other-device records', async () => {
+  const {client,remote,recoveryKey}=await ready(complete());remote.fail('before');
+  await assert.rejects(client.rotateVaultKey({recoveryKey},replacementPassphrase,accountPassword),/unconfirmed/);
+  const attempted=puts(remote)[1].body;
+  const result=await client.rotateVaultKey({recoveryKey},replacementPassphrase,accountPassword);
+  assert.deepEqual(puts(remote)[2].body,attempted);
+  const second=createCloudClient({fetch:remote.fetcher});await second.session();await second.unlockVault({recoveryKey:result.recoveryKey});
+  await client.request('/doses/dose1','PUT',dose('dose1',{revision:2,note:'Other device correction'}));
+  const count=puts(remote).length;
+  await assert.rejects(second.rotateVaultKey({recoveryKey:result.recoveryKey},passphrase,accountPassword),/changed elsewhere/);
+  assert.equal(puts(remote).length,count);
+  assert.equal((await second.request<AppData>('/data')).doses[0].note,'Other device correction');
+});
+
+test('lock during a committed rotation clears memory and prevents a late acknowledgement from reopening records; new password unlocks after reload', async () => {
+  const {client,remote,recoveryKey}=await ready(complete()), held=remote.holdNext();
+  const operation=client.rotateVaultKey({recoveryKey},replacementPassphrase,accountPassword);
+  const rejected=assert.rejects(operation,error=>error instanceof ApiError&&error.status===401);
+  await held.started.promise;client.lock();held.finish.resolve();await rejected;
+  assert.equal(client.getState().locked,true);
+  await assert.rejects(client.request('/export'),/Unlock/);
+  const reopened=createCloudClient({fetch:remote.fetcher});await reopened.session();
+  assert.deepEqual(await reopened.unlockVault({vaultPassphrase:replacementPassphrase}),complete());
+  await assert.rejects(decryptVault(remote.vault!.dataEnvelope,await importRecoveryKey(recoveryKey),'owner1'));
+});
+
+test('account password change refuses the current encryption password locally, retains an open workspace and all-session logout clears it immediately', async () => {
+  const {client,remote}=await ready(complete());
+  await assert.rejects(client.request('/auth/change-password','POST',{currentPassword:accountPassword,newPassword:passphrase}),/different/);
+  assert.equal(remote.requests.some(r=>r.path==='/auth/change-password'),false);
+  await assert.rejects(client.request('/auth/change-password','POST',{currentPassword:'wrong',newPassword:replacementPassphrase}),error=>error instanceof ApiError&&error.status===403);
+  assert.equal(client.getState().locked,false);
+  await client.request('/auth/change-password','POST',{currentPassword:accountPassword,newPassword:replacementPassphrase});
+  assert.deepEqual((await client.request<{data:AppData}>('/export')).data,complete());
+  assert.equal(client.getState().user?.id,'owner1');
+  assert.equal((await client.request<{security:{sessionLifetimeHours:number}}>('/security')).security.sessionLifetimeHours,24);
+  const signingOut=client.request('/auth/logout-all','POST',{password:replacementPassphrase});
+  assert.equal(client.getState().locked,true);
+  await signingOut;assert.equal(client.getState().user,null);
+  assert.equal((await client.session()),null);
+});
+
+test('a stale device checks the latest encryption password before transmitting a proposed new account password',async()=>{
+  const {client,remote,recoveryKey}=await ready();
+  const second=createCloudClient({fetch:remote.fetcher});await second.session();await second.unlockVault({recoveryKey});
+  await client.changeVaultPassword({vaultPassphrase:passphrase},replacementPassphrase,accountPassword);
+  await assert.rejects(second.request('/auth/change-password','POST',{currentPassword:accountPassword,newPassword:replacementPassphrase}),/different/);
+  assert.equal(remote.requests.some(row=>row.path==='/auth/change-password'),false);
+});
 
 test('encrypted preferences accept 1/5/10 and survive unlock/export; invalid increments never upload or replace them', async () => {
   const {client,remote,recoveryKey}=await ready(complete());
@@ -120,6 +250,63 @@ test('two devices use whole-vault CAS; conflict never overwrites another device'
   assert.equal(refreshed.doses[0].note, 'First device correction');
   await assert.rejects(second.request('/doses/dose1', 'PUT', dose('dose1', { revision: 2, note: 'Still stale' })), error => error instanceof ApiError && error.status === 409);
   assert.equal(remote.vault!.revision, 2);
+});
+
+test('an observed vault revision cannot roll backward and restore a deleted record', async () => {
+  const { client, remote, recoveryKey } = await ready(complete());
+  const old = structuredClone(remote.vault);
+  await client.request('/doses/dose1', 'DELETE', { revision: 2 }, 'owner1');
+  const latest = structuredClone(remote.vault);
+  assert.equal(client.getState().revision, 2);
+  remote.vault = old;
+  await assert.rejects(client.request('/data'), error => error instanceof ApiError && error.status === 409 && /older record snapshot/.test(error.message));
+  assert.equal(client.getState().revision, 2);
+  assert.equal((await client.request<{data: AppData}>('/export')).data.doses.length, 0);
+  client.lock();
+  await assert.rejects(client.unlockVault({ recoveryKey }), /older record snapshot/);
+  assert.equal(client.getState().locked, true);
+  remote.vault = latest;
+  assert.equal((await client.unlockVault({ recoveryKey })).doses.length, 0);
+});
+
+test('account deletion sends only the account password, clears keys, and rejects queued work', async () => {
+  const { client, remote } = await ready(complete());
+  const deletion = client.request('/account', 'DELETE', { password: 'correct-account-password' }, 'owner1');
+  const lateSave = assert.rejects(client.request('/profile', 'PUT', { ...profile, name: 'Must not return' }, 'owner1'), error => error instanceof ApiError && error.status === 401);
+  assert.deepEqual(await deletion, { ok: true });
+  await lateSave;
+  const request = remote.requests.find(row => row.path === '/account')!;
+  assert.equal(request.method, 'DELETE');
+  assert.deepEqual(request.body, { password: 'correct-account-password' });
+  assert.equal(client.getState().locked, true);
+  assert.equal(client.getState().user, null);
+  assert.equal(remote.vault, null);
+  await assert.rejects(client.request('/export'), /Sign in/);
+  assert.equal(puts(remote).length, 1);
+});
+
+test('wrong account password does not destroy an open vault, and invalid deletion bodies never reach the server', async () => {
+  const { client, remote } = await ready(complete());
+  await assert.rejects(client.request('/account', 'DELETE', { password: 'wrong-password' }, 'owner1'), error => error instanceof ApiError && error.status === 403);
+  assert.equal(client.getState().locked, false);
+  assert.deepEqual((await client.request<{data: AppData}>('/export')).data, complete());
+  const count = remote.requests.length;
+  for (const body of [{ password: '' }, { password: 'correct-account-password', vaultPassphrase: passphrase }, { password: 3 }]) await assert.rejects(client.request('/account', 'DELETE', body, 'owner1'));
+  await assert.rejects(client.request('/account', 'DELETE', { password: 'correct-account-password' }, 'wrong-owner'), /owns these records/);
+  assert.equal(remote.requests.length, count);
+});
+
+test('account deletion waits for an earlier save and cannot be followed by a late plaintext restoration', async () => {
+  const { client, remote } = await ready(complete()), held = remote.holdNext();
+  const saving = client.request('/doses/dose1', 'PUT', dose('dose1', { revision: 2, note: 'Synthetic last save' }));
+  await held.started.promise;
+  const deletion = client.deleteAccount('correct-account-password');
+  const after = assert.rejects(client.request('/data'), error => error instanceof ApiError && error.status === 401);
+  assert.equal(remote.requests.some(row => row.path === '/account'), false);
+  held.finish.resolve();
+  await saving; await deletion; await after;
+  assert.equal(client.getState().locked, true);
+  assert.equal(remote.vault, null);
 });
 
 test('failed upload leaves confirmed data unchanged; exact retry reuses ciphertext safely', async () => {
@@ -320,4 +507,68 @@ test('replace import never rolls an existing record revision backwards or accept
   const restored = await client.request<AppData>('/data');
   assert.equal(restored.doses[0].revision, 21); assert.equal(restored.doses[0].note, older.doses[0].note);
   await assert.rejects(client.request('/doses/dose1', 'PUT', current.doses[0]), error => error instanceof ApiError && error.status === 409);
+});
+
+function transferFixture(){
+  const workspace=freshGuestWorkspace('UTC');workspace.date='2026-09-13';
+  workspace.drafts=[{...newDose('ritalin','7.5'),timeZone:'UTC',date:'2026-09-13',time:'15:03',administeredAt:'2026-09-13T15:03:00Z',note:'SYNTHETIC guest import confidential 91837'}];
+  workspace.favorites=[{id:'guest-favorite',productId:'ritalin',strength:'7.5',packageStrength:'7.5',quantity:'1'}];
+  return prepareGuestTransfer(workspace);
+}
+test('guest transfer writes one encrypted snapshot and a lost acknowledgement retry confirms the same simulation once',async()=>{
+  const initial=complete(),{client,remote}=await ready(initial),transfer=transferFixture(),original=structuredClone(transfer);
+  remote.fail('after');
+  await assert.rejects(client.request('/guest-import','POST',transfer,'owner1'),error=>error instanceof ApiError&&error.status===0);
+  assert.deepEqual((await client.request<{data:AppData}>('/export')).data,initial);
+  const committed=structuredClone(remote.vault);
+  assert.deepEqual(await client.request('/guest-import','POST',transfer,'owner1'),{ok:true});
+  assert.equal(puts(remote).length,2);assert.deepEqual(remote.vault,committed);assert.deepEqual(transfer,original);
+  const merged=(await client.request<{data:AppData}>('/export')).data;
+  assert.deepEqual(merged.doses,initial.doses);assert.deepEqual(merged.profile,initial.profile);assert.deepEqual(merged.inventory,initial.inventory);
+  assert.equal(merged.scenarios[0].doses.length,2);assert.equal(merged.scenarios[0].doses[1].status,'simulated');
+  assert.equal(remote.requests.some(row=>row.path==='/guest-import'),false);
+  assert.equal(JSON.stringify(remote.requests).includes('SYNTHETIC guest import confidential 91837'),false);
+});
+test('guest transfer retries a precommit failure with identical envelopes and merges the latest other-device data',async()=>{
+  const {client,remote,recoveryKey}=await ready(complete()),other=createCloudClient({fetch:remote.fetcher});
+  await other.session();await other.unlockVault({recoveryKey});
+  await other.request('/profile','PUT',{...profile,name:'Newer account preference',revision:0});
+  const transfer=transferFixture();remote.fail('before');
+  await assert.rejects(client.request('/guest-import','POST',transfer),error=>error instanceof ApiError&&error.status===0);
+  const attempted=structuredClone(puts(remote).at(-1)!.body);
+  await client.request('/guest-import','POST',transfer);
+  assert.deepEqual(puts(remote).at(-1)!.body,attempted);
+  const merged=(await client.request<{data:AppData}>('/export')).data;
+  assert.equal(merged.profile!.name,'Newer account preference');assert.equal(merged.scenarios[0].doses.length,2);
+});
+test('locking during guest upload suppresses its acknowledgement and discards the decrypted candidate',async()=>{
+  const {client,remote}=await ready(),transfer=transferFixture(),hold=remote.holdNext();
+  const work=client.request('/guest-import','POST',transfer);
+  await hold.started.promise;client.lock();hold.finish.resolve();
+  await assert.rejects(work,error=>error instanceof ApiError&&error.status===401);
+  assert.equal(client.getState().locked,true);
+  await assert.rejects(client.request('/export'),error=>error instanceof ApiError&&error.status===423);
+  assert.equal(transfer.workspace.drafts.length,1);
+});
+test('guest transfer CAS conflict preserves the other-device write and retry remerges the same frozen transfer',async()=>{
+  const {client:other,remote,recoveryKey}=await ready(complete());let race=false;
+  const client=createCloudClient({fetch:(async(url,init)=>{
+    if(race&&String(url).endsWith('/vault')&&init?.method==='PUT'){
+      race=false;await other.request('/profile','PUT',{...profile,name:'Concurrent account change',revision:0});
+    }
+    return remote.fetcher(url,init);
+  }) as typeof fetch});
+  await client.session();await client.unlockVault({recoveryKey});const transfer=transferFixture();race=true;
+  await assert.rejects(client.request('/guest-import','POST',transfer),error=>error instanceof ApiError&&error.status===409);
+  assert.equal((await other.request<{data:AppData}>('/export')).data.scenarios[0].doses.length,1);
+  await client.request('/guest-import','POST',transfer);
+  const merged=(await client.request<{data:AppData}>('/export')).data;
+  assert.equal(merged.profile!.name,'Concurrent account change');assert.equal(merged.scenarios[0].doses.length,2);
+  assert.deepEqual(merged.doses,complete().doses);
+});
+test('invalid guest transfers never upload a vault or change confirmed account records',async()=>{
+  const initial=complete(),{client,remote}=await ready(initial),transfer=transferFixture();
+  transfer.workspace.drafts[0].quantity='0.';
+  await assert.rejects(client.request('/guest-import','POST',transfer),/Complete or remove/);
+  assert.equal(puts(remote).length,1);assert.deepEqual((await client.request<{data:AppData}>('/export')).data,initial);
 });

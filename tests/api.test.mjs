@@ -19,6 +19,29 @@ const DOSE = {
 const PROFILE = { name: 'Test A', timeZone: 'America/Los_Angeles', timeFormat: '24h', sleepEnabled: true, bedtime: '23:00', wakeTime: '07:00', weekendEnabled: false };
 const RECEIPT = { id: 'synthetic-receipt', productId: 'ritalin-ir', productName: 'Ritalin', packageStrength: '10', strengthUnit: 'mg', unit: 'tablet', quantity: '50', receivedAt: '2026-09-12T08:00:00Z', timeZone: 'America/Los_Angeles', note: 'Synthetic opening balance only' };
 
+test('planned confirmation preference persists across restart/export and rejects non-boolean writes and imports atomically', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'drug-planned-preference-')),dbPath=join(dir,'synthetic.sqlite');
+  let service=await start(dbPath);const account=client(()=>service.url);
+  t.after(async()=>{await service.stop();await rm(dir,{recursive:true,force:true});});
+  await account.request('/api/auth/register','POST',{email:'planned-preference@example.test',password:PASSWORD});
+  assert.equal((await account.request('/api/profile','PUT',{...PROFILE,plannedDoseConfirmation:false})).status,200);
+  await service.stop();service=await start(dbPath);
+  assert.equal((await account.request('/api/data')).data.profile.plannedDoseConfirmation,false);
+  const backup=(await account.request('/api/export')).data;assert.equal(backup.data.profile.plannedDoseConfirmation,false);
+  for(const value of [null,'false',0,1,[]]){
+    const current=(await account.request('/api/data')).data.profile;
+    assert.equal((await account.request('/api/profile','PUT',{...current,plannedDoseConfirmation:value})).status,400);
+    const invalid=structuredClone(backup);invalid.data.profile.plannedDoseConfirmation=value;
+    assert.equal((await account.request('/api/import','POST',{backup:invalid,mode:'replace'})).status,400);
+    assert.equal((await account.request('/api/data')).data.profile.plannedDoseConfirmation,false);
+  }
+  const current=(await account.request('/api/data')).data.profile;
+  assert.equal((await account.request('/api/profile','PUT',{...current,plannedDoseConfirmation:true})).status,200);
+  assert.equal((await account.request('/api/data')).data.profile.plannedDoseConfirmation,true);
+  assert.equal((await account.request('/api/import','POST',{backup,mode:'replace'})).status,200);
+  assert.equal((await account.request('/api/data')).data.profile.plannedDoseConfirmation,false);
+});
+
 test('planned dose events persist independently of the clock and confirm under the same ID exactly once', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'drug-planned-api-')), dbPath = join(dir, 'synthetic.sqlite');
   let service = await start(dbPath);

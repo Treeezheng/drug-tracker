@@ -17,6 +17,32 @@ function positiveDecimal(value:unknown):bigint|null {
   const result=BigInt(whole)*DECIMAL_SCALE+BigInt(fraction.padEnd(9,'0'));
   return result>0n?result:null;
 }
+/** A blank simulated editor row is pending. Saved invalid records are never omitted. */
+export function includeTimelineDose(dose:Dose):boolean {
+  return dose.status!=='skipped'&&(dose.status!=='simulated'||
+    !!(dose.productId&&dose.administeredAt&&dose.strength&&dose.quantity&&dose.amountMg));
+}
+/** Saved administration instants use the same exact UTC format as backup validation. */
+export function doseTimestamp(dose:Dose):number {
+  const value=dose.administeredAt;
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value))return NaN;
+  const parsed=Date.parse(value);
+  return Number.isFinite(parsed)&&new Date(parsed).toISOString().slice(0,19)===value.slice(0,19)?parsed:NaN;
+}
+/** Validate the recorded scalar basis without converting salts, liquids or patches. */
+function modelInputError(dose:Dose):string|null {
+  const admin=doseTimestamp(dose);
+  if(!Number.isFinite(admin))return 'Administration time unavailable or invalid';
+  const strength=positiveDecimal(dose.strength),quantity=positiveDecimal(dose.quantity),amount=positiveDecimal(dose.amountMg);
+  if(strength===null||quantity===null||amount===null)return 'Strength, quantity or amount unavailable or invalid';
+  if(strength*quantity!==amount*DECIMAL_SCALE)return 'Recorded strength, quantity and amount are inconsistent';
+  if(dose.packageStrength!==undefined){
+    if(typeof dose.packageStrength!=='string'||dose.packageStrength.length>100)return 'Package strength unavailable or invalid';
+    const parts=dose.packageStrength.split('/').map(positiveDecimal);
+    if(parts.length>10||parts.some(value=>value===null)||parts[0]!==strength)return 'Package strength is inconsistent with the recorded strength';
+  }
+  return null;
+}
 function eligibleReference(dose:Dose,p:Product):boolean {
   const reference=p.model==='concerta'?18n*DECIMAL_SCALE:p.model==='ritalin'?10n*DECIMAL_SCALE:null;
   if(reference===null||dose.unusual||dose.unit!==p.unit||(dose.strengthUnit!==undefined&&dose.strengthUnit!==p.strengthUnit)
@@ -31,18 +57,34 @@ function eligibleReference(dose:Dose,p:Product):boolean {
   // from fractional tablets, even if a historical unusual flag was absent.
   return quantity%DECIMAL_SCALE===0n&&strength*quantity===amount*DECIMAL_SCALE;
 }
+/** Analyte identity is independent of dose/formulation model eligibility. */
+export function concentrationAnalyte(dose:Dose):{group:string;unit:string}|null {
+  const product=products.find(item=>item.id===dose.productId);
+  // This is the only physical concentration analyte currently implemented.
+  // Do not infer it from a historical name, or merge dex/enantiomer/prodrug families.
+  return product?.family==='Methylphenidate'?{group:'Methylphenidate',unit:'ng/mL'}:null;
+}
 export function modelGroup(dose:Dose):{group:string;unit:string;reference:boolean}{
   const p=products.find(p=>p.id===dose.productId);
   if(!p)return {group:`${dose.productName} · unsupported`,unit:'relative units',reference:false};
   const reference=eligibleReference(dose,p);
-  return reference ? {group:'Methylphenidate',unit:'ng/mL',reference:true} : {group:`${p.name} · assumptions`,unit:'relative units',reference:false};
+  const analyte=concentrationAnalyte(dose);
+  if(reference)return {group:'Methylphenidate',unit:'ng/mL',reference:true};
+  if(analyte&&!dose.assumptions?.accepted)return {...analyte,reference:false};
+  return {group:`${p.name} · assumptions`,unit:'relative units',reference:false};
+}
+
+export function contributesToGroup(dose:Dose,group:string):boolean {
+  return modelGroup(dose).group===group||concentrationAnalyte(dose)?.group===group;
 }
 export function concentration(dose:Dose, at:number, publishedOnly=false):ModelValue {
   const p=products.find(p=>p.id===dose.productId),g=modelGroup(dose);
   if(!p)return {group:g.group,unit:g.unit,evidence:'D',tail:false,value:null,reason:'Historical product model unavailable'};
   const base={group:g.group,unit:g.unit,evidence:g.reference?p.evidence:'D',tail:false,reason:''};
-  const admin=Date.parse(dose.administeredAt);
-  if(!Number.isFinite(admin)||dose.status==='skipped'||!Number.isFinite(Number(dose.amountMg))||Number(dose.amountMg)<=0) return {...base,value:0,reason:'Pending or excluded'};
+  if(dose.status==='skipped')return {...base,value:0,reason:'Excluded: skipped administration'};
+  const invalid=modelInputError(dose);
+  if(invalid||!Number.isFinite(at))return {...base,value:null,reason:invalid??'Evaluation time invalid'};
+  const admin=doseTimestamp(dose);
   const u=(at-admin)/3600000;
   if(u<0) return {...base,value:0};
   if(dose.modelVersion&&dose.modelVersion!==MODEL_VERSION)return {...base,value:null,reason:'Pinned model version unavailable'};
@@ -67,22 +109,62 @@ export function concentration(dose:Dose, at:number, publishedOnly=false):ModelVa
   }
   return {...base,value:null,reason:'Unsupported domain'};
 }
+
+export interface ReferenceOverlayInfo {
+  originalProductId:string;referenceProductId:string;referenceLabel:string;
+  sourceIds:string[];unit:'ng/mL';referenceEvidence:'B';reason:string;
+}
+/** A separately labelled source illustration, never the recorded product's concentration.
+ * No manufacturer-specific equivalence or proportional dose scaling is inferred. */
+export function referenceForDose(dose:Dose):ReferenceOverlayInfo|null {
+  if(dose.productId!=='methylphenidate-ir'||dose.status==='skipped'||dose.assumptions?.accepted||modelInputError(dose)
+    ||(dose.modelVersion&&dose.modelVersion!==MODEL_VERSION))return null;
+  const original=products.find(product=>product.id===dose.productId),reference=products.find(product=>product.id==='ritalin');
+  if(!original||!reference||dose.formulation!==original.formulation
+    ||positiveDecimal(dose.strength)!==10n*DECIMAL_SCALE||positiveDecimal(dose.quantity)!==DECIMAL_SCALE
+    ||!eligibleReference(dose,reference))return null;
+  return {originalProductId:dose.productId,referenceProductId:reference.id,referenceLabel:'Ritalin 10 mg',sourceIds:[...reference.sourceIds],unit:'ng/mL',referenceEvidence:'B',reason:'No direct data for this product · Ritalin 10 mg reference only'};
+}
+export function referenceOverlay(dose:Dose,at:number,publishedOnly=true):(ReferenceOverlayInfo&{value:number|null;tail:boolean})|null {
+  const reference=referenceForDose(dose);
+  if(!reference)return null;
+  // The synthetic reference exists only for evaluating the source curve. Never
+  // persist it, return it as a dose, or include it in contributions/groupedTotals.
+  const value=concentration({...dose,productId:reference.referenceProductId},at,publishedOnly);
+  return {...reference,value:value.value,tail:value.tail};
+}
 export function contributions(doses:Dose[],at:number,publishedOnly=false){
   const seen=new Set<string>();
-  return doses.filter(d=>{if(seen.has(d.id)||!d.administeredAt||d.status==='skipped')return false;seen.add(d.id);return true;}).map(dose=>({dose,...concentration(dose,at,publishedOnly)}));
+  return doses.filter(d=>{if(seen.has(d.id)||!includeTimelineDose(d))return false;seen.add(d.id);return true;}).map(dose=>({dose,...concentration(dose,at,publishedOnly)}));
+}
+
+/** A saved relative illustration never supplies a physical concentration value. */
+export function contributionForGroup(dose:Dose,at:number,group:string,publishedOnly=false):ModelValue|undefined {
+  const value=concentration(dose,at,publishedOnly);
+  if(value.group===group)return value;
+  const analyte=concentrationAnalyte(dose);
+  if(analyte?.group!==group)return undefined;
+  const admin=doseTimestamp(dose);
+  const knownZero=dose.status==='skipped'||(!modelInputError(dose)&&Number.isFinite(at)&&at<admin);
+  return {...analyte,value:knownZero?0:null,tail:false,evidence:'D',reason:'Concentration unavailable; saved illustration uses relative units'};
 }
 export function groupedTotals(doses:Dose[],at:number,publishedOnly=false){
   const groups:Record<string,{value:number;complete:boolean;unit:string;tail:boolean;items:ReturnType<typeof contributions>}>= {};
-  for(const c of contributions(doses,at,publishedOnly)){
+  const add=(c:ReturnType<typeof contributions>[number])=>{
     const g=groups[c.group]??={value:0,complete:true,unit:c.unit,tail:false,items:[]};
     if(c.value===null)g.complete=false;else g.value+=c.value;
     g.tail||=c.tail;g.items.push(c);
+  };
+  for(const c of contributions(doses,at,publishedOnly)){
+    add(c);
+    const analyte=concentrationAnalyte(c.dose);
+    if(analyte&&analyte.group!==c.group)add({dose:c.dose,...contributionForGroup(c.dose,at,analyte.group,publishedOnly)!});
   }
   return groups;
 }
 export function effectWindow(d:Dose){
-  const a=d.assumptions, t=Date.parse(d.administeredAt);
-  if(!a?.accepted||!Number.isFinite(t)||d.status==='skipped'||!(Number(d.amountMg)>0)||!Number.isFinite(Number(d.amountMg))||(d.modelVersion&&d.modelVersion!==MODEL_VERSION))return null;
+  const a=d.assumptions, t=doseTimestamp(d);
+  if(!a?.accepted||modelInputError(d)||d.status==='skipped'||(d.modelVersion&&d.modelVersion!==MODEL_VERSION))return null;
   if(![a.onsetHours,a.durationMinHours,a.durationMaxHours].every(Number.isFinite)||a.onsetHours<0||a.durationMinHours<0||a.durationMaxHours<a.durationMinHours||!['from_onset','from_administration'].includes(a.durationOrigin)||(a.durationOrigin==='from_administration'&&a.durationMinHours<a.onsetHours))return null;
   const start=t+a.onsetHours*3600000, origin=a.durationOrigin==='from_onset'?start:t;
   return {start,minEnd:origin+a.durationMinHours*3600000,maxEnd:origin+a.durationMaxHours*3600000,label:'Assumed effect window'};
