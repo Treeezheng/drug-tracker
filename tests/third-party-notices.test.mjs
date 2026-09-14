@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { installedPackages, leadingComments, lockedPackages, readmeLicense } from '../scripts/third-party-notices.mjs'
+import { installedPackages, leadingComments, lockedPackages, readmeLicense, readNoticeBytes } from '../scripts/third-party-notices.mjs'
 
 test('notice inventory follows reachable installed dependencies, including peers, without stale packages', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dose-notices-'))
@@ -38,4 +38,40 @@ test('embedded implementation extraction retains consecutive attribution blocks 
   assert.equal(leadingComments(text), '/* Copyright A\n * Terms A\n */\n\n// Public domain implementation\n/* Modified by B */')
   assert.equal(leadingComments('#include <stdint.h>\n'), '')
   assert.throws(() => leadingComments('/* incomplete'), /Unclosed/)
+})
+
+test('notice reading binds validation and bounded reads to the same open descriptor', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dose-notice-read-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const filename = path.join(root, 'LICENSE'), moved = path.join(root, 'original')
+  const original = Buffer.from('Original license with trailing spaces  \r\n')
+  fs.writeFileSync(filename, original)
+  const fstat = fs.fstatSync
+  let replaced = false
+  const mock = t.mock.method(fs, 'fstatSync', function(fd, ...args) {
+    const result = fstat.call(fs, fd, ...args)
+    if (!replaced) {
+      replaced = true
+      fs.renameSync(filename, moved)
+      fs.writeFileSync(filename, 'Replacement contents')
+    }
+    return result
+  })
+  assert.deepEqual(readNoticeBytes(filename), original, 'Replacing the pathname after opening cannot substitute its contents.')
+  mock.mock.restore()
+  assert.throws(() => readNoticeBytes(path.join(root, 'missing')), { code: 'ENOENT' })
+  assert.throws(() => readNoticeBytes(root), /Not a regular notice file/)
+  if (fs.constants.O_NOFOLLOW) {
+    const link = path.join(root, 'symlink')
+    fs.symlinkSync(filename, link)
+    assert.throws(() => readNoticeBytes(link), { code: 'ELOOP' })
+  }
+  fs.writeFileSync(filename, 'A')
+  const growth = t.mock.method(fs, 'fstatSync', function(fd, ...args) {
+    const result = fstat.call(fs, fd, ...args)
+    fs.appendFileSync(filename, Buffer.alloc(4_000_000, 65))
+    return result
+  })
+  assert.throws(() => readNoticeBytes(filename), /Notice file too large/)
+  growth.mock.restore()
 })

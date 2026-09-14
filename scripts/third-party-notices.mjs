@@ -8,12 +8,36 @@ const legalName = /^(?:licen[cs]e(?:[._-].*)?|copying(?:[._-].*)?|copyright(?:[.
 // For example, Lucide's copyright.js is an icon, not a legal notice.
 const codeOrAsset = /\.(?:[cm]?[jt]sx?|map|json|css|svg|woff2?|wasm)$/i
 
-function readText(filename) {
-  if (fs.statSync(filename).size > 4_000_000) throw new Error(`Notice file too large: ${filename}`)
-  const text = fs.readFileSync(filename, 'utf8').replace(/\r\n?/g, '\n')
+export function readNoticeBytes(filename) {
+  // Open once, validate and read that descriptor. A replaced pathname cannot
+  // switch the file between a path-based size check and its later read.
+  const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`Not a regular notice file: ${filename}`)
+    const limit = 4_000_000, chunks = []
+    let total = 0
+    for (;;) {
+      // Enforce the limit on bytes actually read, including if the open file
+      // grows concurrently; do not trust a previously observed file size.
+      const buffer = Buffer.allocUnsafe(Math.min(65_536, limit + 1 - total))
+      const length = fs.readSync(fd, buffer, 0, buffer.length, null)
+      if (!length) return Buffer.concat(chunks, total)
+      total += length
+      if (total > limit) throw new Error(`Notice file too large: ${filename}`)
+      chunks.push(buffer.subarray(0, length))
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+function normalizeText(bytes, filename) {
+  const text = bytes.toString('utf8').replace(/\r\n?/g, '\n')
   if (text.includes('\0') || text.includes('\uFFFD')) throw new Error(`Not a UTF-8 notice: ${filename}`)
   return text.trimEnd() + '\n'
 }
+
+const readText = filename => normalizeText(readNoticeBytes(filename), filename)
 
 export function lockedPackages(lock) {
   const section = lock.match(/^packages:\n([\s\S]*?)(?=^snapshots:)/m)?.[1]
@@ -22,21 +46,26 @@ export function lockedPackages(lock) {
 }
 
 export function installedPackages(root, locked) {
+  root = fs.realpathSync(root)
   const visited = new Set()
   const packages = new Map()
   const modules = fs.realpathSync(path.join(root, 'node_modules'))
   function locate(from, name) {
     for (let dir = from; ; dir = path.dirname(dir)) {
-      const candidate = path.join(dir, 'node_modules', name, 'package.json')
-      if (fs.existsSync(candidate)) return fs.realpathSync(path.dirname(candidate))
+      try {
+        const resolved = fs.realpathSync(path.join(dir, 'node_modules', name))
+        const pkg = JSON.parse(readText(path.join(resolved, 'package.json')))
+        return { dir: resolved, pkg }
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+      }
       if (dir === root || dir === path.dirname(dir)) return null
     }
   }
-  function visit(dir, isRoot = false) {
-    dir = fs.realpathSync(dir)
+  function visit(dir, isRoot = false, suppliedManifest) {
     if (visited.has(dir)) return
     visited.add(dir)
-    const pkg = JSON.parse(readText(path.join(dir, 'package.json')))
+    const pkg = suppliedManifest ?? JSON.parse(readText(path.join(dir, 'package.json')))
     if (!isRoot) {
       if (!dir.startsWith(modules + path.sep)) throw new Error(`Dependency outside project node_modules: ${pkg.name}`)
       const id = `${pkg.name}@${pkg.version}`
@@ -49,7 +78,7 @@ export function installedPackages(root, locked) {
     ])
     for (const name of [...names].sort(compare)) {
       const dependency = locate(dir, name)
-      if (dependency) visit(dependency)
+      if (dependency) visit(dependency.dir, false, dependency.pkg)
       else if (!(name in (pkg.optionalDependencies ?? {})) && !pkg.peerDependenciesMeta?.[name]?.optional) {
         throw new Error(`Required dependency not installed: ${pkg.name} -> ${name}`)
       }
@@ -104,8 +133,9 @@ const repository = pkg => (typeof pkg.repository === 'string' ? pkg.repository :
 
 export function generateNotices(root) {
   root = fs.realpathSync(root)
-  const lock = readText(path.join(root, 'pnpm-lock.yaml'))
-  const lockHash = createHash('sha256').update(fs.readFileSync(path.join(root, 'pnpm-lock.yaml'))).digest('hex')
+  const lockFile = path.join(root, 'pnpm-lock.yaml'), lockBytes = readNoticeBytes(lockFile)
+  const lock = normalizeText(lockBytes, lockFile)
+  const lockHash = createHash('sha256').update(lockBytes).digest('hex')
   const packages = installedPackages(root, lockedPackages(lock))
   let sections = 0
   let sourceHeaders = 0
@@ -157,7 +187,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   for (const [relative, content] of [['public/THIRD_PARTY_NOTICES.txt', result.txt], ['THIRD_PARTY_NOTICES.md', result.md]]) {
     const filename = path.join(root, relative)
     if (process.argv.includes('--check')) {
-      if (!fs.existsSync(filename) || fs.readFileSync(filename, 'utf8') !== content) throw new Error(`Stale notices: ${relative}`)
+      let existing
+      try { existing = readNoticeBytes(filename).toString('utf8') }
+      catch (error) { if (error.code !== 'ENOENT') throw error }
+      if (existing !== content) throw new Error(`Stale notices: ${relative}`)
     } else fs.writeFileSync(filename, content)
   }
   console.log(`${process.argv.includes('--check') ? 'Verified' : 'Generated'} ${result.count} packages, ${result.sections} notice sections, ${result.sourceHeaders} embedded source headers.`)
