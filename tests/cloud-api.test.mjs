@@ -52,7 +52,7 @@ async function fixture(t, options = {}) {
     // Node fetch discards a custom Host; node:http models a same-machine TLS proxy faithfully.
     const encoded = body !== undefined || rawBody !== undefined ? rawBody ?? JSON.stringify(body) : undefined;
     return new Promise((accept, reject) => {
-      const req = httpRequest({ hostname: '127.0.0.1', port: instance.server.address().port, path: path.startsWith('/drug') || path.startsWith('/api') ? path : `/drug/api${path}`,
+      const req = httpRequest({ hostname: '127.0.0.1', port: instance.server.address().port, path: path === '/' || path.startsWith('/?') || path.startsWith('/drug') || path.startsWith('/api') ? path : `/drug/api${path}`,
         method, headers: {
         Host: new URL(origin).host,
         ...(!['GET', 'HEAD'].includes(method) && !noOrigin ? { Origin: origin } : {}),
@@ -78,6 +78,30 @@ async function fixture(t, options = {}) {
   return { dir, dbPath, user: setup.user, request, start, stop, get server() { return instance.server; } };
 }
 const login = f => f.request('/auth/login', { method: 'POST', body: credentials });
+
+test('cloud root GET and HEAD redirect only after exact host, origin and Heroku HTTPS checks', async t => {
+  const f = await fixture(t, { proxyMode: 'heroku', skipBootstrap: true });
+  const secureHeaders = { 'X-Forwarded-Proto': 'https' };
+  for (const method of ['GET', 'HEAD']) {
+    for (const path of ['/', '/?next=https://evil.test']) {
+      const response = await f.request(path, { method, headers: secureHeaders });
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get('location'), '/drug/');
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.equal(response.data, '');
+    }
+    for (const headers of [
+      { ...secureHeaders, Host: 'evil.test', 'X-Forwarded-Host': new URL(ORIGIN).host },
+      { ...secureHeaders, Origin: 'https://evil.test' },
+      { 'X-Forwarded-Proto': 'http' }, {},
+    ]) {
+      const response = await f.request('/', { method, headers });
+      assert.equal(response.status, 403);
+      assert.equal(response.headers.get('location'), null);
+    }
+  }
+  assert.equal((await f.request('/', { method: 'POST', headers: secureHeaders, body: {} })).status, 404);
+});
 
 test('cloud configuration and bootstrap require an explicit separate database and create exactly one durable account', async t => {
   const dir = await directory(t), dbPath = join(dir, 'new-cloud.sqlite');

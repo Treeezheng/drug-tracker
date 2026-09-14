@@ -196,6 +196,10 @@ export async function createCloudServer(options = {}) {
     try {
       guards(req);
       const path = new URL(req.url, config.origin).pathname;
+      if (path === '/' && ['GET', 'HEAD'].includes(req.method)) {
+        res.writeHead(302, { Location: '/drug/' });
+        return res.end();
+      }
       if (path === `${PREFIX}/edition` && req.method === 'GET') return send(res, 200, { edition: 'cloud' });
       if (path === `${PREFIX}/session` && req.method === 'GET') { const user = await currentUser(req); return send(res, 200, { user: user ? publicUser(user) : null }); }
       if (path === `${PREFIX}/auth/register` && req.method === 'POST') {
