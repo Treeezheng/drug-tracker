@@ -3,6 +3,7 @@ import { Search } from 'lucide-react';
 import { products } from '../lib/catalog';
 import { commitFavoriteChanges, favoriteChanges, favoriteSelection } from '../lib/favorite-selection';
 import { groupMedicationProducts, matchesMedicationGroup, type MedicationGroup } from '../lib/medication-display';
+import { isRecordingOnlyMedication, RECORDING_ONLY_EXPLANATION, RECORDING_ONLY_LABEL } from '../lib/medication-model-support';
 import { groupStrengthSelected, groupStrengths, selectGroupStrength, selectedGroupCount } from '../lib/grouped-favorite-selection';
 import { parseCustomStrength } from '../lib/package-strength';
 import type { FavoriteChange } from '../lib/favorite-selection';
@@ -26,6 +27,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
   const selectedCount = selectedGroupCount(selection);
   const families = [...new Set(grouped.map(group => group.family))];
   const unknown = favorites.filter(favorite => !products.some(product => product.id === favorite.productId));
+  const hasRecordingOnly = grouped.some(group => isRecordingOnlyMedication(group.defaultProduct.id)) || (!needle && unknown.length > 0);
 
   useEffect(() => {
     const dialog = container.current?.closest('dialog');
@@ -76,7 +78,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
   return <Modal title="Choose medications" wide onClose={close}>
     <div className="favorite-picker" ref={container} aria-busy={busy}>
       <label className="search-input fp-search"><Search size={16} aria-hidden="true"/><input aria-label="Search brand or ingredient" placeholder="Search brand or ingredient" value={query} onChange={event => setQuery(event.target.value)} disabled={busy}/></label>
-      <p className="fp-hint" id={hintId}>Choose one or more strengths.</p>
+      <p className="fp-hint" id={hintId}>Choose one or more strengths.{hasRecordingOnly&&<> {RECORDING_ONLY_EXPLANATION}</>}</p>
       <fieldset className="fp-catalog" disabled={busy} aria-describedby={hintId}>
         <legend className="sr-only">Medication strengths</legend>
         {families.map(family => <section className="fp-family" key={family}>
@@ -84,7 +86,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
           {grouped.filter(group => group.family === family).map(group => {
             const product = group.defaultProduct;
             return <section className="fp-product-group" key={group.id}>
-            <div className="fp-name"><h4>{group.title}</h4>{group.brand&&<p className="fp-brand" title="Brand reference">{group.brand}</p>}<p className="fp-formulation">{product.formulation}</p></div>
+            <div className="fp-name"><h4>{group.title}{isRecordingOnlyMedication(product.id)&&<span className="medication-recording-only">{RECORDING_ONLY_LABEL}</span>}</h4>{group.brand&&<p className="fp-brand" title="Brand reference">{group.brand}</p>}<p className="fp-formulation">{product.formulation}</p></div>
             <fieldset className="fp-product">
               <legend className="sr-only">{group.title} strengths</legend>
               <div className="fp-strengths">{groupStrengths(group, favorites, selection).map(strength => {
@@ -111,7 +113,7 @@ export default function FavoritePicker({ favorites, onSave, onRemove, onClose, o
             const checked = event.currentTarget.checked;
             pending.current = null; setError('');
             setSelection(current => { const next = new Map(current); if (checked) next.set(key, favorite); else next.delete(key); return next; });
-          }}/><span>{favorite.productId} · {favorite.packageStrength || favorite.strength}</span></label>;
+          }}/><span>{favorite.productId} · {favorite.packageStrength || favorite.strength}<span className="medication-recording-only">{RECORDING_ONLY_LABEL}</span></span></label>;
         })}</section>}
       </fieldset>
       {error && <p className="inline-error" role="alert">{error}</p>}
