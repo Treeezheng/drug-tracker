@@ -44,11 +44,15 @@ documents describe this convenience/security tradeoff.
 - Real OPAQUE client/server tests cover enrollment, reopening, changed envelopes,
   expiry, revocation races and stale responses.
 - Browser testing with a disposable synthetic account confirmed reopening with
-  automatic unlocking and requiring the password after Hide and reload.
+  automatic unlocking and requiring the password after Hide and reload. The
+  Security switch also removed the grant and required a password after reload.
 - Phone and tablet previews confirmed equal 44-pixel date/time controls with a
   12-pixel gap, including Confirm taken and the inventory receipt form.
 - Inventory Other opens the complete picker, adds the selected medication and
   preserves the entered receipt quantity and note. Tablet buttons use 0.5 steps.
+- A final functional pass found that removing every guest favorite exposed
+  unsaved catalog strengths. The guest editor now receives the empty selection
+  explicitly and retains only the current record's strength in that case.
 - Explicit saves classify past/current instants as Taken and future instants as
   Planned. Merely passing a planned time never confirms administration.
 - Previous actual records are combined into one dashed From history path per
