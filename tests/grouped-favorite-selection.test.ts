@@ -47,10 +47,10 @@ test('brand search keeps the complete group and all generic strengths',()=>{
   assert.equal(matchesMedicationGroup(group,'Concerta'),false);
   assert.equal(group.products.length,2);
 });
-test('dose dropdown exposes each selected variant without changing the active branded product ID',()=>{
+test('dose dropdown has one formulation entry without changing the active branded product ID',()=>{
   const profile:Profile={name:'',timeZone:'America/Los_Angeles',timeFormat:'24h',sleepEnabled:false,bedtime:'',wakeTime:'',weekendEnabled:false,weekendBedtime:'',weekendWakeTime:''};
   const html=renderToStaticMarkup(createElement(DoseEditor,{dose:newDose('ritalin','10'),index:0,profile,productIds:['ritalin','methylphenidate-ir'],onChange:()=>{}}));
   const select=html.match(/<select aria-label="Dose 1 medication"[\s\S]*?<\/select>/)![0];
-  assert.match(select,/<option value="ritalin" selected="">Methylphenidate IR · Ritalin<\/option>/);
-  assert.match(select,/<option value="methylphenidate-ir">Methylphenidate IR · Generic<\/option>/);
+  assert.match(select,/<option value="ritalin" selected="">Methylphenidate IR<\/option>/);
+  assert.doesNotMatch(select,/<option value="methylphenidate-ir"| · Ritalin| · Generic/);
 });

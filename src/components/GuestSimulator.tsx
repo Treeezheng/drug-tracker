@@ -1,4 +1,3 @@
-import PolicyUpdateNotice from './PolicyUpdateNotice';
 import { useEffect, useRef, useState } from 'react';
 import { Pill, Plus, ChevronLeft, ChevronRight, CalendarDays, Copy, X } from 'lucide-react';
 import { sources } from '../lib/catalog';
@@ -17,6 +16,8 @@ import Modal from './Modal';
 import { GUEST_CONSENT_KEY, forgetGuestChoice, readGuestConsent, rememberGuestChoice, saveRememberedGuestWorkspace } from '../lib/guest-consent';
 import { submitGuestDose } from '../lib/guest-dose-entry';
 import { useProfilePreferences } from '../hooks/useProfilePreferences';
+import { useNewDoseFocus } from '../hooks/useNewDoseFocus';
+import { doseRowId } from '../lib/dose-row-focus';
 import { restoreGuestSession, sameGuestWorkspace } from '../lib/guest-session';
 import { withGuestStorageLock } from '../lib/guest-storage-lock';
 import './GuestSimulator.css';
@@ -40,6 +41,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
   const addAfterChoosing=useRef(false);
   const [consented,setConsented]=useState(loaded.consented),[remember,setRemember]=useState(loaded.remembered);
   const [guestConsent,setGuestConsent]=useState(false),[adult,setAdult]=useState(false),[chooseStorage,setChooseStorage]=useState(false);
+  const focusNewDose=useNewDoseFocus(page==='simulation'&&!choosing&&!guestConsent);
   const afterConsent=useRef<null|'dose'|'medications'>(null);
   const {profile,drafts,favorites,date,days}=workspace;
   const settings=useProfilePreferences(profile,`guest-${settingsEpoch}`,async(next:Profile)=>{guestDayWindow(date,days,next.timeZone);const saved={...next,name:''};setWorkspace(current=>({...current,profile:saved}));setError('');return saved;});
@@ -88,6 +90,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
     try{
       const row=favorite?updateDose(newDose(favorite.productId,favorite.packageStrength||favorite.strength),{quantity:favorite.quantity},profile.timeZone):{...newDose(),productId:'',productName:'',formulation:'',strength:'',packageStrength:'',strengthUnit:'',unit:'',amountMg:'',ingredients:[]};
       change({drafts:[...drafts,{...row,...currentDoseTime(profile.timeZone,profile.timeIncrementMinutes||5),timeZone:profile.timeZone,status:'simulated'}]});
+      focusNewDose(row.id);
     }catch{setError('This medication is unavailable in the current catalog. Choose another medication.');}
   }
   function editDose(previous:Dose,next:Dose){
@@ -97,14 +100,15 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
   function removeDose(id:string){change({drafts:drafts.filter(d=>d.id!==id)});expandDose(id);}
   function duplicateDose(dose:Dose){
     if(drafts.length>=100){setError('This guest workspace supports up to 100 simulated doses.');return;}
-    change({drafts:[...drafts,{...dose,id:crypto.randomUUID(),status:'simulated'}]});
+    const row={...dose,id:crypto.randomUUID(),status:'simulated' as const};
+    change({drafts:[...drafts,row]});focusNewDose(row.id);
   }
   function submitDose(dose:Dose){
     try{setSubmittedIds(submitGuestDose(dose,submittedIds));setError('');}
     catch(cause){setError((cause as Error).message);}
   }
   async function clear(){
-    setRemember(false);
+    focusNewDose(null);setRemember(false);
     try{await withGuestStorageLock(()=>{if(!live.current)return;clearGuestWorkspace(window.localStorage);forgetGuestChoice(window.localStorage);deviceSnapshot.current=null;});if(!live.current)return;skipNextSave.current=true;setBlocked(false);setStorageError('');}
     catch{if(!live.current)return;setStorageError('Device storage could not be cleared. This page has been reset in memory; the saved device copy may remain.');setBlocked(true);}
     setWorkspace(freshGuestWorkspace(profile.timeZone));setSettingsEpoch(value=>value+1);setSubmittedIds(new Set());setError('');
@@ -125,7 +129,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
   }
   const range=guestDayWindow(date,days,profile.timeZone),scoped=scopeTimeline({actual:[],drafts,start:range.start,end:range.end,publishedOnly});
   return <div className="simple-shell guest-shell"><header className="app-header"><a href="#" className="brand" onClick={event=>{event.preventDefault();setPage('simulation');}}><Pill size={22}/><span>Drug Tracker</span></a><nav className="app-nav" aria-label="Main navigation"><button className={page==='simulation'?'active':''} aria-current={page==='simulation'?'page':undefined} onClick={()=>setPage('simulation')}>Dose Simulation</button><button onClick={onSignIn}>History</button><button className={page==='settings'?'active':''} aria-current={page==='settings'?'page':undefined} onClick={()=>setPage('settings')}>Settings</button></nav><div className="account-control"><button className="text-button" onClick={onSignIn}>Sign in</button><button className="button secondary small" onClick={onRegister}>Create account</button></div></header>
-    <main><PolicyUpdateNotice/><div className="page-title responsive-page-title"><h1>{page==='simulation'?'Dose Simulation':'Simulation settings'}</h1></div><p className="guest-storage-note">Guest simulation · {remember?'Saved unencrypted on this device.':'In memory only; refreshing clears this simulation.'} Account records are separate.</p>
+    <main><div className="page-title responsive-page-title"><h1>{page==='simulation'?'Dose Simulation':'Simulation settings'}</h1></div><p className="guest-storage-note">Guest simulation · {remember?'Saved unencrypted on this device.':'In memory only; refreshing clears this simulation.'} Account records are separate.</p>
       {(notice||error||storageError)&&<p className="notice" role={error||storageError?'alert':'status'}>{error||storageError||notice}</p>}
       {page==='simulation'?<><div className="toolbar simulation-toolbar"><div className="date-nav"><button className="icon-button" aria-label="Previous day" disabled={date==='0001-01-01'} onClick={()=>change({date:addDays(date,-1)})}><ChevronLeft size={18}/></button><label className="selected-date"><CalendarDays size={16}/><input aria-label="Chart date" type="date" value={date} onChange={e=>{if(validGuestDate(e.target.value))change({date:e.target.value});else setError('Enter a valid chart date.');}}/></label><button className="icon-button" aria-label="Next day" disabled={date==='9998-12-31'} onClick={()=>change({date:addDays(date,1)})}><ChevronRight size={18}/></button><button className="text-button" onClick={()=>change({date:todayInZone(profile.timeZone)})}>Today</button></div><button className="button primary mobile-add-dose" onClick={()=>addDose()}><Plus size={16}/>Add dose</button><div className="segmented">{([1,2,3] as const).map(n=><button key={n} className={days===n?'selected':''} aria-pressed={days===n} onClick={()=>change({days:n})}>{n===1?'Day':`${n*24} hours`}</button>)}</div></div>
       <section className="card timeline-card"><TimelineChart onAddDose={()=>addDose()} hasPendingDose={drafts.length>0} omittedHistoryCount={scoped.omittedHistoryCount} omittedUnknownHistoryCount={scoped.omittedUnknownHistoryCount} doses={scoped.doses} date={date} days={days} profile={profile} publishedOnly={publishedOnly} baseline="empty" onProfile={()=>setPage('settings')} onMove={(id,iso)=>change({drafts:drafts.map(d=>d.id===id?{...d,...instantToLocal(iso,profile.timeZone),administeredAt:iso,timeZone:profile.timeZone,status:'simulated'}:d)})}/></section>
@@ -135,7 +139,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
           <div className="guest-dose-time">{formatInstant(Date.parse(dose.administeredAt),profile,false)}<small>{instantToLocal(dose.administeredAt,profile.timeZone).date}</small></div>
           <div className="guest-dose-product"><strong><MedicationName id={dose.productId} name={dose.productName}/></strong><small>{dose.packageStrength||dose.strength} {dose.strengthUnit||'mg'} · {dose.quantity} {dose.unit}</small></div>
           <span className="tag">Simulated</span><div className="guest-dose-actions"><button className="text-button" onClick={()=>expandDose(dose.id)}>Edit</button><button className="icon-button" aria-label={`Duplicate simulated dose ${index+1}`} onClick={()=>duplicateDose(dose)}><Copy size={15}/></button><button className="icon-button" aria-label={`Remove simulated dose ${index+1}`} onClick={()=>removeDose(dose.id)}><X size={15}/></button></div>
-        </div>:<div className="planned-row" key={dose.id}>
+        </div>:<div className="planned-row" id={doseRowId(dose.id)} key={dose.id}>
           <DoseEditor onMoreMedications={()=>{addAfterChoosing.current=false;chooseMedications();}} dose={dose} index={index} profile={profile} favorites={favorites.length?favorites:undefined} productIds={favorites.map(f=>f.productId)} onChange={next=>editDose(dose,next)} onRemove={()=>removeDose(dose.id)} onDuplicate={()=>duplicateDose(dose)}/>
           <div className="row-state"><span className="muted">Simulation</span><button className="button add-record small" onClick={()=>submitDose(dose)}><Plus size={15}/>Add</button></div>
         </div>)}

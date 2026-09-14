@@ -1,11 +1,9 @@
 import type { AppData, Assumptions, Checkin, Dose, Profile } from './types';
-import { addDays, dayWindow, formatInstant, instantToLocal } from './time';
-import { SYMPTOM_IDS, symptomSelectionError } from './symptoms';
+import { addDays, dayWindow, instantToLocal } from './time';
+import { SYMPTOM_IDS, SYMPTOM_LABELS, symptomSelectionError } from './symptoms';
 import { normalizeFavoritesData } from './favorites';
 
 const SCALE = 1_000_000_000n;
-const MISSING_DATA = 'No record does not prove no dose. These totals describe recorded administrations, not adherence.';
-const SYMPTOM_DISCLOSURE = 'Self-reported observations. Timing alone does not establish a medication cause. No record does not prove no symptoms.';
 
 export interface DoseSummary {
   key: string; product: string; strength: string; unit: string; count: number;
@@ -115,40 +113,41 @@ export function filterCheckins(checkins: Checkin[], from: string, to: string, ti
 }
 
 export function csvString(doses: Dose[], profile: Profile, from: string, to: string, checkins: Checkin[] = []): string {
-  const header: (string | number)[] = [
-    'Record ID', 'Status', 'Date in report time zone', 'Time in report time zone', 'Report time zone',
-    'Administration UTC', 'Original time zone', 'Product', 'Formulation', 'Package strength as recorded', 'Package strength unit', 'Manufacturer as recorded',
-    'Quantity', 'Quantity unit', 'Labeled ingredient amount mg', 'Ingredient amounts mg', 'Amount basis', 'Nominal patch delivery mg per labeled 9-hour period', 'Patch removal UTC',
-    'Unusual administration', 'Notes', 'Model version', 'Revision', 'Report from', 'Report to', 'Missing-data disclosure',
-    'event_type', 'symptoms', 'checkin_time_utc', 'checkin_original_timezone', 'checkin_original_date', 'legacy_focus', 'legacy_sleep_quality',
-  ];
+  const header = ['Date', 'Time', 'Time zone', 'UTC time', 'Medication', 'Formulation', 'Strength', 'Strength unit',
+    'Quantity', 'Quantity unit', 'Total mg', 'Amount details', 'Status', 'Discomfort', 'Notes'];
   const events: { time: number; id: string; row: (string | number)[] }[] = [];
   for (const dose of filterDoses(doses, from, to, profile.timeZone)) {
+    instant(dose.administeredAt, 'Administration time');
+    const strength=scaled(dose.strength,'Strength'),quantity=scaled(dose.quantity,'Quantity'),amount=scaled(dose.amountMg,'Labeled amount');
+    if(strength*quantity!==amount*SCALE)throw new Error('A recorded amount does not match its strength and quantity. Correct the record before exporting.');
+    if(dose.packageStrength!==undefined)packageStrength(dose.packageStrength,dose.strength);
     const local = instantToLocal(dose.administeredAt, profile.timeZone);
-    // For combination products, the separate ingredient amounts are the report.
-    // Do not present an addition of chemically different ingredients as one mg total.
-    const isCombination = (dose.ingredients?.length ?? 0) > 1 || dose.amountBasis === 'first listed ingredient';
+    const isCombination = dose.amountBasis === 'first listed ingredient'
+      || ((dose.ingredients?.length ?? 0) > 1 && dose.amountBasis !== 'labeled ingredient');
     const isPatchDelivery = dose.amountBasis === 'labeled delivery over 9 hours';
+    const details = [
+      isPatchDelivery ? `${dose.amountMg} mg nominal labeled delivery over 9 hours` : '',
+      (dose.ingredients?.length ?? 0) > 1 ? dose.ingredients!.map(item => `${item.name}: ${item.amountMg} mg`).join('; ') : '',
+      dose.removalAt ? `Patch removal: ${dose.removalAt}` : '',
+      dose.unusual ? 'Altered administration as recorded' : '',
+    ].filter(Boolean).join('; ');
+    // Chemically different components and nominal patch delivery are not an
+    // absorbed-drug total. Their original amounts remain explicit in details.
     events.push({ time: Date.parse(dose.administeredAt), id: dose.id, row: [
-      dose.id, dose.status, local.date, local.time, profile.timeZone, dose.administeredAt, dose.timeZone,
-      dose.productName, dose.formulation, dose.packageStrength ?? dose.strength, dose.strengthUnit ?? 'unit not recorded', dose.manufacturer ?? '',
-      dose.quantity, dose.unit, isCombination || isPatchDelivery ? '' : dose.amountMg,
-      (dose.ingredients ?? []).map(item => `${item.name}: ${item.amountMg}${isPatchDelivery ? ' (nominal delivery over 9 hours)' : ''}`).join('; '),
-      dose.amountBasis ?? 'labeled ingredient', isPatchDelivery ? dose.amountMg : '', dose.removalAt ?? '',
-      dose.unusual ? 'Yes - standard model may not apply' : 'No', dose.note, dose.modelVersion ?? '', dose.revision ?? '',
-      from, to, MISSING_DATA,
-      'dose', '', '', '', '', '', '',
+      local.date, local.time, profile.timeZone, dose.administeredAt, dose.productName, dose.formulation,
+      dose.packageStrength ?? dose.strength, dose.strengthUnit ?? 'unit not recorded', dose.quantity, dose.unit,
+      isCombination || isPatchDelivery ? '' : dose.amountMg, details, 'Taken', '', dose.note,
     ] });
   }
   for (const checkin of filterCheckins(checkins, from, to, profile.timeZone)) {
     const local = checkin.recordedAt ? instantToLocal(checkin.recordedAt, profile.timeZone) : { date: checkin.date, time: '' };
+    const note = [checkin.note ?? '', checkin.focus !== undefined ? `Focus (legacy): ${checkin.focus}` : '',
+      checkin.sleepQuality !== undefined ? `Sleep quality (legacy): ${checkin.sleepQuality}` : '',
+      checkin.recordedAt ? '' : 'Original date only; time and time zone were not recorded.'].filter(Boolean).join('\n');
     events.push({ time: checkin.recordedAt ? Date.parse(checkin.recordedAt) : dayWindow(checkin.date, 1, profile.timeZone).start, id: checkin.id, row: [
-      checkin.id, 'self-reported', local.date, local.time, profile.timeZone,
-      '', checkin.timeZone ?? '', '', '', '', '', '',
-      '', '', '', '', '', '', '',
-      '', checkin.note ?? '', '', checkin.revision ?? '', from, to,
-      `${SYMPTOM_DISCLOSURE}${checkin.recordedAt ? '' : ' Legacy calendar date only; the observation time was not recorded.'}`,
-      checkin.symptoms ? 'symptom' : 'legacy_checkin', (checkin.symptoms ?? []).join('; '), checkin.recordedAt ?? '', checkin.timeZone ?? '', checkin.date ?? '', checkin.focus ?? '', checkin.sleepQuality ?? '',
+      local.date, local.time, checkin.recordedAt ? profile.timeZone : '', checkin.recordedAt ?? '',
+      '', '', '', '', '', '', '', '', 'Self-reported',
+      (checkin.symptoms ?? []).map(id => SYMPTOM_LABELS[id] ?? id).join('; '), note,
     ] });
   }
   const rows = [header, ...events.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)).map(event => event.row)];
@@ -168,169 +167,6 @@ function download(blob: Blob, filename: string): void {
 
 export function downloadCsv(doses: Dose[], profile: Profile, from: string, to: string, checkins: Checkin[] = []): void {
   download(new Blob(['\uFEFF', csvString(doses, profile, from, to, checkins)], { type: 'text/csv;charset=utf-8' }), `dose-timeline-${from}-to-${to}.csv`);
-}
-
-function reportCanceled(): DOMException { return new DOMException('Report export canceled.', 'AbortError'); }
-function waitForReport<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return pending;
-  return new Promise((resolve, reject) => {
-    const cancel = () => { signal.removeEventListener('abort', cancel); reject(reportCanceled()); };
-    if (signal.aborted) cancel();
-    else signal.addEventListener('abort', cancel, { once: true });
-    // Handle the losing promise too: a delayed module load must not retain an
-    // export's waiting frame or cause an unhandled rejection after cancellation.
-    pending.then(value => { signal.removeEventListener('abort', cancel); if (signal.aborted) reject(reportCanceled()); else resolve(value); }, error => { signal.removeEventListener('abort', cancel); reject(error); });
-  });
-}
-
-/** Exported separately to verify pagination without starting a browser download. */
-export async function buildReportPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number, signal?: AbortSignal) {
-  if (signal?.aborted) throw reportCanceled();
-  if (!Number.isSafeInteger(unsynced) || unsynced < 0) throw new Error('Invalid pending-change count. Refresh the records before exporting.');
-  const { jsPDF } = await waitForReport(import('jspdf'), signal);
-  if (signal?.aborted) throw reportCanceled();
-  const selected = filterDoses(doses, from, to, profile.timeZone);
-  const summary = summarize(selected, profile.timeZone);
-  const pdf = new jsPDF({ unit: 'mm', format: 'letter', compress: true, putOnlyUsedFonts: true });
-  pdf.setProperties({ title: 'Dose Timeline - medication record', subject: `Actual administration records ${from} to ${to}`, creator: 'Dose Timeline' });
-  const margin = 17;
-  const width = pdf.internal.pageSize.getWidth() - margin * 2;
-  const bottom = pdf.internal.pageSize.getHeight() - 20;
-  let y = 20;
-
-  const ascii = (value: string) => /^[\x20-\x7e\n\r\t]*$/.test(value);
-  const canvasFor = (value: string, size: number, bold: boolean) => {
-    if (typeof document === 'undefined') throw new Error('Non-Latin report text must be rendered in a browser.');
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('This browser could not render report text.');
-    const px = size * 96 / 72 * 3;
-    const font = `${bold ? '600' : '400'} ${px}px sans-serif`;
-    context.font = font;
-    const measured = context.measureText(value);
-    canvas.width = Math.max(1, Math.ceil(measured.width + 6));
-    canvas.height = Math.ceil(px * 1.5);
-    context.font = font;
-    context.fillStyle = '#263b37';
-    context.textBaseline = 'alphabetic';
-    context.fillText(value, 2, px * 1.1);
-    return { canvas, width: canvas.width / 3 * 25.4 / 96, height: canvas.height / 3 * 25.4 / 96, baseline: px * 1.1 / 3 * 25.4 / 96 };
-  };
-  const draw = (value: string, x: number, top: number, size: number, bold = false) => {
-    pdf.setFont('helvetica', bold ? 'bold' : 'normal');
-    pdf.setFontSize(size);
-    if (ascii(value)) pdf.text(value, x, top);
-    else {
-      // Preserve user-entered names/notes beyond PDF's built-in Latin glyph set.
-      const rendered = canvasFor(value, size, bold);
-      pdf.addImage(rendered.canvas, 'PNG', x, top - rendered.baseline, rendered.width, rendered.height);
-    }
-  };
-  const wrap = (value: string, size: number, bold: boolean): string[] => {
-    pdf.setFont('helvetica', bold ? 'bold' : 'normal');
-    pdf.setFontSize(size);
-    if (ascii(value)) return pdf.splitTextToSize(value, width) as string[];
-    const lines: string[] = [];
-    for (const paragraph of value.replace(/\r\n?/g, '\n').split('\n')) {
-      let line = '';
-      for (const character of paragraph) {
-        const candidate = line + character;
-        if (line && canvasFor(candidate, size, bold).width > width) { lines.push(line); line = character; }
-        else line = candidate;
-      }
-      lines.push(line);
-    }
-    return lines;
-  };
-  const newPage = () => {
-    pdf.addPage();
-    pdf.setTextColor(81, 101, 96);
-    draw('Dose Timeline / medication record', margin, 15, 9, true);
-    draw(`${from} to ${to} | ${profile.timeZone}`, margin, 21, 8);
-    y = 31;
-  };
-  const ensure = (height: number) => { if (y + height > bottom) newPage(); };
-  const paragraph = (text: string, size = 10, bold = false, after = 2) => {
-    const lineHeight = size * 0.48;
-    pdf.setTextColor(38, 59, 55);
-    for (const line of wrap(text, size, bold)) { ensure(lineHeight); draw(line, margin, y, size, bold); y += lineHeight; }
-    y += after;
-  };
-  const section = (title: string) => {
-    ensure(23);
-    y += 5;
-    pdf.setDrawColor(209, 219, 213);
-    pdf.line(margin, y - 3, margin + width, y - 3);
-    paragraph(title, 12, true, 3);
-  };
-
-  paragraph('Dose Timeline', 22, true, 2);
-  paragraph('Medication record for clinician review', 12, false, 5);
-  if (profile.name) paragraph(`Prepared for: ${profile.name}`, 11, true);
-  paragraph(`Report dates: ${from} through ${to} (inclusive)`);
-  paragraph(`Report time zone: ${profile.timeZone}`);
-  paragraph(`Generated: ${formatInstant(Date.now(), profile)}`, 9);
-  paragraph(unsynced > 0
-    ? `Sync status: ${unsynced} change${unsynced === 1 ? '' : 's'} pending. This report uses the records currently available on this device; recent offline changes may be missing.`
-    : 'Sync status: no pending changes reported.', 9);
-  paragraph(MISSING_DATA, 9);
-  paragraph('Actual administrations only. Planned, skipped and simulated entries are excluded from consumption totals. This report does not recommend a dose or establish treatment safety.', 9);
-
-  section('Totals by exact product and strength');
-  if (!summary.length) paragraph('No actual administration records were found in this date range.');
-  for (const item of summary) {
-    ensure(27);
-    paragraph(item.product, 10, true, 1);
-    paragraph(`Package strength: ${item.strength} ${item.strengthUnit}. ${item.count} administration${item.count === 1 ? '' : 's'} across ${item.days} recorded day${item.days === 1 ? '' : 's'}.`, 9, false, 1);
-    if (item.manufacturer) paragraph(`Manufacturer as recorded: ${item.manufacturer}.`, 9, false, 1);
-    paragraph(`Quantity recorded: ${item.quantity} ${item.unit}.`, 9, false, 1);
-    if (item.amountBasis === 'labeled delivery over 9 hours') {
-      paragraph(`Nominal labeled delivery across applied patches: ${item.amountMg} mg over the labeled 9-hour wear periods. Actual absorbed or consumed mass is not measured; early removal may change delivery.`, 9, false, 1);
-    } else if (item.ingredients.length) {
-      for (const ingredient of item.ingredients) paragraph(`Labeled ${ingredient.name}: ${ingredient.amountMg} mg.`, 9, false, 1);
-    } else paragraph(`${item.amountBasis === 'first listed ingredient' ? 'First listed ingredient only (other ingredient amounts not recorded)' : 'Total labeled amount for this product'}: ${item.amountMg} mg.`, 9, false, 1);
-    y += 3;
-  }
-  if (summary.length) paragraph('Products and ingredients are listed separately. Amounts do not imply equivalence between formulations or medicines.', 9);
-
-  section('Chronological administration details');
-  if (!selected.length) paragraph('No recorded actual administrations to list.');
-  selected.forEach((dose, index) => {
-    ensure(26);
-    paragraph(`${index + 1}. ${formatInstant(Date.parse(dose.administeredAt), profile)}`, 10, true, 1);
-    paragraph(`${dose.productName} - ${dose.formulation}`, 10, true, 1);
-    paragraph(`Package strength: ${dose.packageStrength ?? dose.strength} ${dose.strengthUnit ?? '(unit not recorded)'}; quantity: ${dose.quantity} ${dose.unit}.`, 9, false, 1);
-    if (dose.manufacturer) paragraph(`Manufacturer as recorded: ${dose.manufacturer}.`, 9, false, 1);
-    if (dose.amountBasis === 'labeled delivery over 9 hours') {
-      paragraph(`Nominal labeled delivery: ${dose.amountMg} mg over 9 hours. This is not measured absorbed or consumed mass.`, 9, false, 1);
-    } else if (dose.ingredients?.length) {
-      for (const ingredient of dose.ingredients) paragraph(`Labeled ${ingredient.name}: ${ingredient.amountMg} mg.`, 9, false, 1);
-    } else paragraph(`${dose.amountBasis === 'first listed ingredient' ? 'First listed ingredient only (other ingredient amounts not recorded)' : 'Labeled ingredient amount'}: ${dose.amountMg} mg.`, 9, false, 1);
-    paragraph(`UTC: ${dose.administeredAt} | Original time zone: ${dose.timeZone}`, 8, false, 1);
-    if (dose.removalAt) paragraph(`Patch removed: ${formatInstant(Date.parse(dose.removalAt), profile)}`, 9, false, 1);
-    if (dose.unusual) paragraph('Unusual administration recorded; the standard model may not apply.', 9, false, 1);
-    if (dose.note) paragraph(`Note: ${dose.note}`, 9, false, 1);
-    paragraph(`Record ID: ${dose.id}${dose.revision === undefined ? '' : ` | Revision: ${dose.revision}`}`, 8, false, 3);
-  });
-  const pages = pdf.getNumberOfPages();
-  for (let page = 1; page <= pages; page++) {
-    pdf.setPage(page);
-    pdf.setTextColor(99, 115, 109);
-    draw('Private medication record. Review with your clinician.', margin, bottom + 10, 8);
-    pdf.setFontSize(8);
-    pdf.text(`${page} / ${pages}`, margin + width, bottom + 10, { align: 'right' });
-  }
-  return pdf;
-}
-
-/** The same cancellation gate applies to delayed generation and the final download. */
-export async function saveReportWhenReady(pending: Promise<{ save(filename: string, options: { returnPromise: true }): unknown }>, filename: string, signal?: AbortSignal): Promise<void> {
-  const pdf = await waitForReport(pending, signal);
-  if (signal?.aborted) throw reportCanceled();
-  await pdf.save(filename, { returnPromise: true });
-}
-export function downloadPdf(doses: Dose[], profile: Profile, from: string, to: string, unsynced: number, signal?: AbortSignal): Promise<void> {
-  return saveReportWhenReady(buildReportPdf(doses, profile, from, to, unsynced, signal), `dose-timeline-${from}-to-${to}.pdf`, signal);
 }
 
 export function downloadJson(data: AppData): void {

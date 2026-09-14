@@ -16,7 +16,7 @@ const COOKIE = 'dose_session';
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
 const publicUser = (user) => ({ id: user.id, email: user.email, name: user.name });
-const SYMPTOM_IDS = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'none'];
+const SYMPTOM_IDS = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'anxiety', 'palpitations', 'other', 'none'];
 
 class ApiError extends Error {
   constructor(status, message, details) {

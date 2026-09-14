@@ -49,16 +49,17 @@ test('a record retains its original package after favorites change, including cu
   assert.equal(unknown.productId,'old-product');
 });
 
-test('variant-specific favorites expose only that product’s strengths and the original saved package',()=>{
+test('one formulation exposes favorites from both saved products and keeps the original package',()=>{
   const dose=newDose('ritalin','10');
   const favorites=[favorite('methylphenidate-ir','5'),favorite('ritalin','20'),favorite('concerta','36')];
   assert.deepEqual(doseStrengthChoices(dose,favorites),[
+    {productId:'methylphenidate-ir',packageStrength:'5'},
     {productId:'ritalin',packageStrength:'20'},
     {productId:'ritalin',packageStrength:'10'},
   ]);
   assert.equal(dose.productId,'ritalin');
   const generic=newDose('methylphenidate-ir','5');
-  assert.deepEqual(doseStrengthOptions(generic,favorites),['5']);
+  assert.deepEqual(doseStrengthOptions(generic,favorites),['5','20']);
 });
 
 test('a grouped strength selection explicitly changes product snapshots without rounding quantity or transferring reference evidence',()=>{
@@ -66,7 +67,7 @@ test('a grouped strength selection explicitly changes product snapshots without 
   const original={...newDose('ritalin','10'),revision:4,note:'Keep original note',administeredAt:'2026-09-13T08:00:00Z'};
   const before=structuredClone(original);
   const genericChoice={productId:'methylphenidate-ir',packageStrength:'5'};
-  assert.ok(!doseStrengthChoices(original,favorites).some(choice=>choice.productId===genericChoice.productId));
+  assert.ok(doseStrengthChoices(original,favorites).some(choice=>choice.productId===genericChoice.productId));
   const generic=selectDoseStrength(original,genericChoice,'UTC');
   assert.equal(generic.productId,'methylphenidate-ir');assert.equal(generic.packageStrength,'5');assert.equal(generic.amountMg,'5');
   assert.equal(generic.id,original.id);assert.equal(generic.revision,4);assert.equal(generic.note,original.note);assert.equal(generic.administeredAt,original.administeredAt);
@@ -88,13 +89,13 @@ test('equal grouped strengths appear once and keep the current record’s origin
   assert.equal(generic.productId,'methylphenidate-ir');
 });
 
-test('explicit Generic and Ritalin selections apply their own favorite even when the other product appears first',()=>{
+test('a unified formulation uses a saved favorite and each subsequent strength keeps its saved source',()=>{
   const favorites=[{...favorite('ritalin','10'),quantity:'1.5'},favorite('methylphenidate-ir','5'),favorite('methylphenidate-ir','20')];
   const blank={...newDose(),productId:'',productName:'',strength:'',packageStrength:'',amountMg:'',quantity:'',ingredients:[]};
   const initial=selectDoseMedication(blank,'methylphenidate-ir',favorites,'UTC');
-  assert.equal(initial.productId,'methylphenidate-ir');assert.equal(initial.packageStrength,'5');assert.equal(initial.quantity,'1');assert.equal(initial.amountMg,'5');
+  assert.equal(initial.productId,'ritalin');assert.equal(initial.packageStrength,'10');assert.equal(initial.quantity,'1.5');assert.equal(initial.amountMg,'15');
   const changed=selectDoseStrength(initial,doseStrengthChoices(initial,favorites).find(choice=>choice.packageStrength==='20')!,'UTC');
-  assert.equal(changed.productId,'methylphenidate-ir');assert.equal(changed.packageStrength,'20');assert.equal(changed.quantity,'1');assert.equal(changed.amountMg,'20');
+  assert.equal(changed.productId,'methylphenidate-ir');assert.equal(changed.packageStrength,'20');assert.equal(changed.quantity,'1.5');assert.equal(changed.amountMg,'30');
   const brand=selectDoseMedication(changed,'ritalin',favorites,'UTC');
   assert.equal(brand.productId,'ritalin');assert.equal(brand.packageStrength,'10');assert.equal(brand.quantity,'1.5');assert.equal(brand.amountMg,'15');
   assert.equal(selectDoseMedication(initial,'',favorites,'UTC').productId,'');

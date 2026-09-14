@@ -1,9 +1,9 @@
 import { products } from './catalog';
-import { CONCERTA_TRACE, MODEL_VERSION, modelGroup, RITALIN_REFERENCE, validIllustrationParameters } from './model';
+import { CONCERTA_TRACE, MODEL_VERSION, modelGroup, referenceForDose, RITALIN_REFERENCE, validIllustrationParameters } from './model';
 import type { Dose } from './types';
 
 export interface DoseFormulaDescription {
-  kind:'reference'|'saved-illustration'|'unavailable';
+  kind:'reference'|'reference-illustration'|'saved-illustration'|'unavailable';
   title:string;
   equations:string[];
   parameters:string[];
@@ -17,6 +17,14 @@ export function describeDoseFormula(dose:Dose):DoseFormulaDescription {
   if(!product)return unavailable();
   if(!Number.isFinite(Number(dose.amountMg))||Number(dose.amountMg)<=0)return unavailable('Complete the strength and quantity to show a formula.');
   if(!modelGroup(dose).reference){
+    const reference=referenceForDose(dose);
+    if(reference){
+      const r=RITALIN_REFERENCE;
+      return {kind:'reference-illustration',title:'Reference simulation · unvalidated',
+        equations:[`Cillustration(t) = (D / ${reference.referenceDoseMg} mg) × Cref(t)`,reference.referenceProductId==='ritalin'?`Cref(t) = ${r.amplitude} × (exp(−kₑt) − exp(−kₐt)) / (exp(−${r.peakHours}kₑ) − exp(−${r.peakHours}kₐ))`:'Cref(t) = Cᵢ + (Cᵢ₊₁ − Cᵢ) × (t − tᵢ) / (tᵢ₊₁ − tᵢ)'],
+        parameters:[`D = ${dose.amountMg} mg · scale = ${reference.doseScale}`,reference.referenceProductId==='ritalin'?`kₑ = ln(2) / ${r.halfLifeHours} h⁻¹ · kₐ = ${r.absorptionRate} h⁻¹`:'After 29.976 h: estimated continuation with a 3.5 h half-life, when shown.'],
+        note:`${reference.reason} t is hours since administration; the reference axis is ng/mL, not a measured or predicted personal concentration.`};
+    }
     const a=dose.assumptions;
     if(!validIllustrationParameters(a))return unavailable();
     return {

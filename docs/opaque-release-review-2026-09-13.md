@@ -41,7 +41,9 @@ PRIVACY、TERMS、README、SECURITY、法律复核与事件流程已经按新代
 
 Root 在本机开发构建中检查 Concerta → Adderall → Concerta 切换：同一选择控件的视口 Y 为 **497.66 / 497.77 / 497.66 px**，页面滚动位置为 **1073 → 625 → 1073**；切换补偿保持选择控件位置稳定。这是本机浏览器观察，不是生产资产、所有设备或所有滚动场景的证明。
 
-[timeline-reference-paths.test.ts](../tests/timeline-reference-paths.test.ts) 的 **6 项图表回归通过**：72 小时 Concerta 观测主体实线、约 30 小时后的估计尾段单独虚线；published-only 仍截断；Generic Ritalin 参照虚线不填补真实未知浓度、不累加到已知总量；完全无模型药物不制造浓度曲线；显示的参照带齐 S2/S3 来源。连同 scope/overlay/unknown/empty 相关测试共 27 项通过。该测试检查真实 SSR 标记与模型结果，不代替目视绘图或医学有效性研究。
+The earlier candidate used dashed reference lines and excluded all reference values from its displayed total. The current candidate supersedes that presentation: matching brand/generic choices share one selector, supported reference calculations contribute to a starred display estimate, and solid curves link to one source/limits explanation. The underlying evidence-qualified `concentration` and `groupedTotals` remain unchanged; `estimateTotals` preserves the direct values and completeness alongside the display values. Unsupported products, different analytes or units, custom/altered packages and invalid records must not acquire invented values. See [current reference scope](reference-overlay-2026-09-13.md).
+
+[timeline-reference-paths.test.ts](../tests/timeline-reference-paths.test.ts), [timeline-estimates.test.ts](../tests/timeline-estimates.test.ts) and [timeline-pointer.test.ts](../tests/timeline-pointer.test.ts) cover the current renderer, reference metadata and pointer behavior. Final counts and browser observations belong to the final release verification record; earlier candidate counts above are historical checks and must not be summed or treated as the final suite. Mobile changes also include dose-edit scroll anchoring, a compact chart footer, Hide wording without removing key clearing, and an Account navigation target.
 
 ## 仍然成立的风险与证据限制
 

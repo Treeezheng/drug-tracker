@@ -521,6 +521,15 @@ tr:last-child td { border-bottom: 0; }
 .settings-section > h2 { margin-bottom: 0; }
 .settings-section > .section-heading { margin-bottom: 0; }
 .settings-section > .button { align-self: flex-start; }
+.settings-toggles { display: grid; gap: 4px; min-width: 0; }
+.settings-section .setting-with-help { margin-block: 0; }
+.settings-toggles > .setting-with-help { min-height: 44px; }
+.settings-medication-action { display: flex; justify-content: center; min-width: 0; }
+.settings-medication-action > .button { justify-content: center; align-items: center; max-width: 100%; text-align: center; }
+.history-records-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; }
+.history-records-heading > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.history-records-heading .export-actions { justify-content: flex-end; gap: 8px; }
+.history-records-heading .export-actions > .text-button { min-height: 44px; padding-inline: 0; font-size: 14px; white-space: nowrap; }
 .favorite-item > span:not(.favorite-star) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .record-details { margin-top: 16px; }
 .record-details p { padding: 7px 0; }
@@ -817,24 +826,39 @@ tr:last-child td { border-bottom: 0; }
 
 .security-actions{display:flex;flex-wrap:wrap;gap:10px;padding-block:6px 12px;}
 
-.policy-update{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:16px;color:var(--muted);font-size:.875rem}.policy-update p{margin:0;flex:1}.policy-update .icon-button{flex-shrink:0}
+.account-settings { scroll-margin-top: max(96px, env(safe-area-inset-top)); }
+.account-disclosures { min-width: 0; }
+.account-disclosures > details { border-top: 1px solid var(--border); margin: 0; padding: 0; }
+.account-disclosures > details > summary { display: flex; position: relative; align-items: center; justify-content: center; min-height: 44px; padding: 10px 36px; list-style: none; text-align: center; font-size: 13px; line-height: 1.5; }
+.account-disclosures > details > summary::-webkit-details-marker { display: none; }
+.account-disclosures > details > summary::after { content: ''; position: absolute; inset-inline-end: 14px; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+.account-disclosures > details[open] > summary::after { transform: rotate(45deg); }
+.account-disclosures > details > p { margin: 4px 0 12px; line-height: 1.65; text-align: start; }
+.account-disclosures > details[open] { padding-bottom: 12px; }
+.account-disclosures .security-actions { justify-content: center; }
+.account-disclosures .security-actions > .button { justify-content: center; text-align: center; }
+.account-refresh { display: flex; justify-content: center; padding-top: 4px; }
+.account-refresh > .button { min-height: 44px; text-align: center; }
+.text-button.data-note-link { display: inline-flex; align-items: center; justify-content: center; vertical-align: baseline; min-width: 24px; width: 24px; min-height: 24px; height: 24px; padding: 0; margin: -2px -2px -2px -4px; line-height: 1; font-size: inherit; }
+.data-note-link > sup { font-size: .75em; line-height: 1; }
 
 /* Reading controls and context share one aligned, compact footer. */
 .chart-footer { margin-inline: -24px; border-top: 1px solid var(--border); }
 .chart-footer-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 20px; padding:10px 24px; }
-.chart-footer-bar .chart-readings-toggle { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; padding:0; min-height:36px; color:var(--muted); font-size:12px; }
-.chart-footer-bar .simulation-notice { flex:1 1 260px; margin:0; padding:0; border:0; text-align:right; }
+.chart-footer-bar .chart-readings-toggle, .chart-footer-bar .chart-sources-toggle { display:inline-flex; align-items:center; gap:4px; flex-shrink:0; padding:0; min-height:36px; color:var(--muted); font-size:12px; }
+.chart-footer-bar .chart-sources-toggle { margin-inline-start: auto; }
+.chart-footer > .simulation-notice { margin:0; padding:0 24px 12px; border:0; text-align:center; }
 .chart-footer .chart-details { border-top:1px solid var(--border); }
 .chart-footer .chart-details[hidden] { display:none; }
 @media(max-width:700px) {
   .chart-footer { margin-inline:-14px; }
   .chart-footer-bar { padding:8px 14px; gap:2px 12px; }
-  .chart-footer-bar .chart-readings-toggle { min-height:40px; }
+  .chart-footer-bar .chart-readings-toggle, .chart-footer-bar .chart-sources-toggle { min-height:44px; }
+  .chart-footer > .simulation-notice { padding:0 14px 12px; }
 }
 
 /* Keep the selected reading together on the right, with breathing room below. */
-.chart-summary { display:flex; align-items:flex-start; justify-content:space-between; gap:16px 28px; flex-wrap:wrap; padding:12px 0 22px; }
-.chart-summary .chart-status-legend { margin:0; padding-top:5px; flex:1 1 210px; }
+.chart-summary { display:flex; align-items:flex-start; justify-content:flex-end; gap:16px 28px; flex-wrap:wrap; padding:12px 0 22px; }
 .chart-summary .reading-control { justify-content:flex-end; margin-left:auto; padding:0; gap:8px 14px; }
 .chart-legend { margin-top:10px; margin-bottom:4px; }
 .chart-reference-note { margin:8px 0 2px; color:var(--muted); font-size:12px; line-height:1.5; text-align:center; }
@@ -850,4 +874,67 @@ tr:last-child td { border-bottom: 0; }
   .inventory-actions { gap:12px; }
 }
 
+/* Native date controls must obey the same phone grid as the time picker. */
+@media (max-width: 700px) {
+  .dose-row .date-field { grid-column: 1; }
+  .dose-row .time-field { grid-column: 2; }
+  .dose-row .date-field, .dose-row .time-field { min-width: 0; inline-size: 100%; }
+  .dose-row .date-field input[type="date"] {
+    display: block; box-sizing: border-box; inline-size: 100%; min-inline-size: 0; max-inline-size: 100%;
+    min-width: 0; width: 100%; max-width: 100%; height: 44px; padding-inline: 6px;
+  }
+  .dose-row .date-field input::-webkit-date-and-time-value { min-width: 0; min-inline-size: 0; inline-size: 100%; text-align: start; }
+  .dose-row .date-field input::-webkit-datetime-edit { min-width: 0; padding: 0; }
+  .dose-row .date-field input::-webkit-calendar-picker-indicator { flex-shrink: 0; margin-inline: 2px 0; padding: 0; }
+  .dose-row .dose-time-inline { grid-template-columns: minmax(0, 1fr) 36px; inline-size: 100%; gap: 2px; }
+  .dose-row .dose-time-inline > .mtp-trigger { min-width: 0; max-width: 100%; padding-inline: 4px; }
+  .dose-row .dose-time-now { width: 36px; min-width: 0; min-height: 44px; padding-inline: 0; }
+
+  .chart-summary { gap: 8px 12px; padding-block: 12px 20px; }
+  .chart-summary .reading-control { align-items: start; min-width: 0; width: auto; gap: 6px 12px; }
+  .chart-summary .reading-time { font-size: 18px; white-space: nowrap; }
+  .chart-summary .reading-values { min-width: 0; gap: 8px 14px; padding-inline-start: 12px; }
+  .chart-summary .reading-value strong { font-size: 20px; line-height: 1.25; }
+  .chart-summary .reading-value > span { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 4px; }
+  .chart-summary .reading-value > span strong, .chart-summary .reading-value > span small { white-space: nowrap; }
+  .chart-summary .reading-control > .text-button { min-height: 36px; padding: 0; }
+  .chart-reference-note { text-align: start; line-height: 1.6; overflow-wrap: anywhere; }
+  .chart-footer-bar { align-items: center; gap: 4px 16px; }
+  .chart-footer-bar .chart-readings-toggle { justify-content: flex-start; }
+  .chart-footer .chart-details .contribution { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 12px; }
+  .chart-footer .chart-details .contribution > span { min-width: 0; overflow-wrap: anywhere; }
+  .chart-footer .chart-details .contribution > span:last-child { text-align: right; }
+}
+@media (max-width: 380px) {
+  .chart-summary { gap: 8px; }
+  .chart-summary .reading-time { font-size: 16px; }
+  .chart-summary .reading-value strong { font-size: 18px; }
+}
+
 .app-loading { max-width:1100px; margin:48px auto; padding:24px; color:var(--muted); }
+
+/* Phone navigation stays reachable without creating another scrolling surface. */
+.simple-shell { min-height: 100dvh; }
+.modal, .mtp-sheet { z-index: 100; } /* Native dialogs/popovers also use the browser top layer. */
+@media (max-width: 700px) {
+  html {
+    scroll-padding-top: calc(112px + env(safe-area-inset-top, 0px));
+    scroll-padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .app-header {
+    position: sticky; top: 0; z-index: 20;
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    background: #fff; box-shadow: 0 2px 8px #1d1d1f08;
+  }
+  .simple-shell main {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+  }
+  .account-settings, .chart-no-data { scroll-margin-top: 16px; }
+  .modal, .modal.wide {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  }
+}

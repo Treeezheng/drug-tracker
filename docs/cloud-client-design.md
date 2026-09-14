@@ -44,13 +44,13 @@ grant均绑定owner、session、认证version、用途、请求来源和TTL；�
 
 云账户key、解密数据、pending只在client闭包内，没有账户明文 IndexedDB/localStorage/Cache API/outbox。请求使用same-origin credentials、no-store、服务器确认owner的 `X-Dose-Owner`，AAD绑定同owner。profile、doses、scenarios、favorites、checkins、inventory整体加密。
 
-访客默认只在内存；18岁声明后明确Remember才使用独立明文localStorage，账户登录不自动导入。Guest绿色Add只是校验并折叠simulated行，不写正式账户数据。本机SQLite与用户明确导出的CSV/PDF/JSON都是明文，不能称为云端密文。
+访客默认只在内存；18岁声明后明确Remember才使用独立明文localStorage，账户登录不自动导入。Guest绿色Add只是校验并折叠simulated行，不写正式账户数据。本机SQLite与用户明确导出的CSV/JSON都是明文，不能称为云端密文。
 
 登录或注册成功后，可以明确选择把当前游客模拟转入账户。`prepareGuestTransfer` 校验并复制 `{workspace,scenarioId}`，整个重试过程保留同一份输入。虚拟 POST `/guest-import` **不对应服务器明文端点**：客户端读取最新已确认密文，在本地解密合并，再通过原有 `/vault` CAS 一次上传完整密文。已有账户资料、正式记录、库存和症状均保留；profile 仅在账户原本为空时取游客偏好；收藏按精确产品与完整规格去重，保留账户原数量偏好；模拟剂量追加到已有 Workspace，或使用冻结的新 scenarioId 建立 Workspace。所有新增剂量仍为 simulated，使用本次传输命名空间的稳定新 ID，不能覆盖既有正式记录。未填完或不合法的游客输入整批拒绝，不丢弃个别行后声称完成。
 
 首次发送或明确 CAS 失败后重试，读取最新账户快照再合并；不确定保存则保留原候选密文，只有精确匹配服务器确认才完成。稳定输入的重复确认不会追加第二份相同剂量；已转为正式记录的同 ID 不会恢复成模拟草稿。helper/client 从不删除浏览器存储。Gate 仅在成功确认后尝试清除同一设备、仍与事先捕获内容匹配的游客副本；其他标签页更新或存储不可访问时保留副本并提示。清理失败后只重试本机清理，不重复上传。取消、锁定或未确认上传均不授权删除游客原稿；已经提交但未收到确认的网络操作仍可能留在账户密文中。
 
-`/export`读取当前已确认内存快照，不含密码、key或session。`/import`采用merge/replace，保留医学原始值/ID，再分配当前修订；文件读取前限制16MB，解析累计UTF8也受限。不能导入非空本机修订/删除历史后宣称云端保留全部审计链。异步PDF导出在退出、owner变化或unmount时取消下载。
+`/export`读取当前已确认内存快照，不含密码、key或session。`/import`采用merge/replace，保留医学原始值/ID，再分配当前修订；文件读取前限制16MB，解析累计UTF8也受限。不能导入非空本机修订/删除历史后宣称云端保留全部审计链。Medication PDF 导出已按用户要求移除。
 
 ## 锁定和剩余边界
 

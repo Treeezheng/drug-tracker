@@ -27,7 +27,7 @@ test('supported IR and saved illustration profiles retain their modeled data',()
   const illustration={...dose('metformin-ir',start),assumptions:{...blankAssumptions(),accepted:true}};
   assert.equal(hasMissingTimelineData([ir],start,start+72*HOUR,true),false);
   assert.equal(hasMissingTimelineData([illustration],start,end,true),false);
-  assert.doesNotMatch(render([ir]),/\* No data/);
+  assert.doesNotMatch(render([ir]),/\* No drug data/);
 });
 
 test('missing-data detection is limited to timed contributions in the displayed view',()=>{
@@ -55,25 +55,26 @@ test('unknown sums show a dash; mixed known contributions have a star and never 
   assert.equal(timelineReading(beforeCurrent,at),'—');
 });
 
-test('rendered partial and entirely missing readings have precise per-panel footnotes',()=>{
+test('rendered partial and entirely missing readings have clickable prefix stars and one shared explanation',()=>{
   const old=dose('concerta',start-48*HOUR),ir={...dose('ritalin',start+10*HOUR),strength:'10',packageStrength:'10',amountMg:'10'};
   const partial=render([old,ir]);
-  assert.match(partial,/<strong>4\.30\*<\/strong>/);
+  assert.match(partial,/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);
   assert.match(partial,/Known contributions only/);
   assert.equal((partial.match(/class="chart-no-data"/g)||[]).length,1);
   const unknown=render([old]);
   assert.match(unknown,/<strong>—<\/strong>/);assert.doesNotMatch(unknown,/<strong>0\.00<\/strong>/);
-  assert.match(unknown,/class="chart-no-data"[^>]*>\* No data<\/span>/);
+  assert.match(unknown,/class="chart-no-data"[^>]*>\* No drug data<\/summary>/);
   const separate=render([ir,dose('metformin-ir',start+HOUR)]);
   const panels=separate.split('class="analyte-panel"');
-  assert.doesNotMatch(panels[1],/class="chart-no-data"/);
-  assert.match(panels[2],/class="chart-no-data"/);
+  assert.doesNotMatch(panels[1],/data-note-link/);
+  assert.match(panels[2],/data-note-link/);
+  assert.equal((separate.match(/\* No drug data/g)||[]).length,1);
 });
 
 test('long views mark missing Concerta tail while empty or future-only unmodeled views do not',()=>{
   const row=dose('concerta',start+8*HOUR);
-  assert.doesNotMatch(render([row]),/\* No data/);
-  assert.match(render([row],3),/\* No data/);
-  assert.doesNotMatch(render([]),/\* No data/);
-  assert.doesNotMatch(render([dose('metformin-ir',end+HOUR)]),/\* No data/);
+  assert.doesNotMatch(render([row]),/\* No drug data/);
+  assert.match(render([row],3),/\* No drug data/);
+  assert.doesNotMatch(render([]),/\* No drug data/);
+  assert.doesNotMatch(render([dose('metformin-ir',end+HOUR)]),/\* No drug data/);
 });

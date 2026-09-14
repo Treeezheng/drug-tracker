@@ -16,7 +16,7 @@ test('a truly empty chart shows one optional Add dose action without axes or inv
   const html=render([],{onAddDose});
   assert.match(html,/Add a dose to see your timeline/);
   assert.equal((html.match(/<button\b/g)||[]).length,1);assert.match(html,/>Add dose<\/button>/);
-  assert.doesNotMatch(html,/<svg|class="reading-control"|ng\/mL|\* No data/);
+  assert.doesNotMatch(html,/<svg|class="reading-control"|ng\/mL|\* No drug data/);
   assert.equal(additions,0);
   const tree=TimelineEmptyState({onAddDose});
   const button=Children.toArray(tree.props.children).find(child=>isValidElement(child)&&child.type==='button');
@@ -36,11 +36,11 @@ test('an incomplete dose row invites completion instead of offering another empt
   }
 });
 
-test('valid but unmodeled medication retains the timing plot and its No data marker',()=>{
+test('valid but unmodeled medication retains the timing plot and its No drug data marker',()=>{
   for(const productId of ['metformin-ir','methylphenidate-ir','archived-product']){
     const original=newDose(productId==='archived-product'?'ritalin':productId);
     const html=render([{...original,productId,administeredAt:new Date(start+3_600_000).toISOString()}]);
-    assert.match(html,/class="chart-svg"/);assert.match(html,/\* No data/);
+    assert.match(html,/class="chart-svg"/);assert.match(html,/\* No drug data/);
     assert.doesNotMatch(html,/class="timeline-empty"|Add a dose to see|Complete your dose/);
   }
 });
@@ -52,7 +52,7 @@ test('omitted old records remain disclosed in the empty view without claiming th
     assert.equal(scope.doses.length,0);assert.equal(scope.omittedHistoryCount,1);
     const html=render(scope.doses,{omittedHistoryCount:scope.omittedHistoryCount,omittedUnknownHistoryCount:scope.omittedUnknownHistoryCount,onAddDose:()=>{}});
     assert.match(html,/No doses to plot in this view/);assert.match(html,/saved records are still available in History/);
-    assert.doesNotMatch(html,/<svg|Add a dose to see your timeline/);
+    assert.doesNotMatch(html,/class="chart-svg"|Add a dose to see your timeline/);
     if(productId==='metformin-ir')assert.match(html,/1 earlier record with unknown contributions is not shown/);
   }
 });

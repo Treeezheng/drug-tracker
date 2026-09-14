@@ -1,6 +1,7 @@
 import { products } from './catalog';
-import { concentration, concentrationAnalyte, CONCERTA_TRACE, contributesToGroup, doseTimestamp, modelGroup, referenceForDose } from './model';
+import { concentrationAnalyte, CONCERTA_TRACE, contributesToGroup, doseTimestamp, modelGroup, referenceForDose } from './model';
 import { hasMissingTimelineData } from './timeline-data';
+import { estimateContribution } from './timeline-estimates';
 import type { Dose } from './types';
 
 export const TIMELINE_DISPLAY_THRESHOLD = 0.001;
@@ -31,10 +32,11 @@ function maximumKnownContribution(dose: Dose, start: number, end: number, publis
   const admin = doseTimestamp(dose);
   if (!Number.isFinite(admin)) return 0;
   const product = products.find(p => p.id === dose.productId);
+  const reference = referenceForDose(dose);
   const elapsedHours: number[] = [];
-  if (modelGroup(dose).reference) {
-    if (product?.model === 'concerta') elapsedHours.push(...CONCERTA_TRACE.map(([hours]) => hours));
-    if (product?.model === 'ritalin') {
+  if (modelGroup(dose).reference || reference) {
+    if (product?.model === 'concerta' || reference?.referenceProductId === 'concerta') elapsedHours.push(...CONCERTA_TRACE.map(([hours]) => hours));
+    if (product?.model === 'ritalin' || reference?.referenceProductId === 'ritalin') {
       const elimination = Math.LN2 / 3.5, absorption = 1.0152449556;
       elapsedHours.push(Math.log(absorption / elimination) / (absorption - elimination));
     }
@@ -44,8 +46,8 @@ function maximumKnownContribution(dose: Dose, start: number, end: number, publis
   const points = [start, end, ...elapsedHours.map(hours => admin + hours * 3_600_000)]
     .filter(at => Number.isFinite(at) && at >= start && at <= end);
   return Math.max(0, ...points.map(at => {
-    const value = concentration(dose, at, publishedOnly).value;
-    return value !== null && Number.isFinite(value) ? value : 0;
+    const value = estimateContribution(dose, at, modelGroup(dose).group, publishedOnly)?.value;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
   }));
 }
 
