@@ -482,7 +482,8 @@ tr:last-child td { border-bottom: 0; }
 .simulation-notice .text-button { min-height: 32px; padding: 3px; font-size: 12px; }
 .planned-row { border-top: 1px solid var(--border); }
 .planned-row .dose-editor { border-top: 0; }
-.planned-row .row-state { padding-inline: 24px; }
+.planned-row .row-state { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 16px 24px; }
+.planned-row .row-state > .button { min-height: 44px; }
 .taken-row { display: grid; grid-template-columns: 24px 160px minmax(0, 1fr) auto auto 44px; align-items: center; gap: 14px; padding: 18px 24px; border-top: 1px solid var(--border); }
 .taken-check { width: 24px; height: 24px; display: grid; place-items: center; color: var(--accent); }
 .taken-time { font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -811,7 +812,6 @@ tr:last-child td { border-bottom: 0; }
 }
 .row-state .button.add-record:not(:disabled) { background: #16834a; border-color: #16834a; color: #fff; }
 .row-state .button.add-record:not(:disabled):hover { background: #126c3d; border-color: #126c3d; }
-.planned-row .row-state { padding-bottom: 12px; }
 .inventory-medication { display: block; min-width: 0; max-width: 100%; }
 .inventory-medication .inventory-medication-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
 .inventory-medication .medication-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 18px; font-weight: 600; color: var(--text); line-height: 1.4; }
