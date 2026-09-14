@@ -81,7 +81,7 @@ sudo install -m 0600 -o root -g root deploy/.env.example /etc/drug-tracker/cloud
 sudo install -m 0644 -o root -g root deploy/drug-tracker.service /etc/systemd/system/drug-tracker.service
 ```
 
-`cloud.env` 只有四个非秘密参数：数据库绝对路径、HTTPS origin、4312 端口和静态目录。账户密码、完整恢复码和数据密钥都不能写入这里。`CLOUD_ALLOW_INSECURE_LOOPBACK` 在 HTTPS 部署中保持未设置。
+`cloud.env` 有五个非秘密参数：数据库绝对路径、HTTPS origin、4312 端口、静态目录和 `CLOUD_PROXY_MODE=caddy-loopback`。该代理模式要求 Caddy 是同机公开入口，并由模板覆写 `X-Drug-Client-IP`；不能直接信任外部请求提交的来源头。账户密码、完整恢复码和数据密钥都不能写入这里。`CLOUD_ALLOW_INSECURE_LOOPBACK` 在 HTTPS 部署中保持未设置。
 
 ## 5. 通过安全网页注册
 

@@ -45,9 +45,9 @@ export function describeDoseFormula(dose:Dose):DoseFormulaDescription {
   }
   const [lastT]=CONCERTA_TRACE[CONCERTA_TRACE.length-1];
   return {
-    kind:'reference',title:'Published profile · A',
-    equations:['C(t) = Cᵢ + (Cᵢ₊₁ − Cᵢ) × (t − tᵢ) / (tᵢ₊₁ − tᵢ)'],
-    parameters:[`Interpolation: 0 ≤ t ≤ ${lastT} h. No data beyond ${lastT} h.`],
-    note:'t is hours since administration; C is ng/mL. Adult 18 mg group profile, not a personal measurement.',
+    kind:'reference',title:'Reference profile · A; estimated continuation · B',
+    equations:['C(t) = Cᵢ + (Cᵢ₊₁ − Cᵢ) × (t − tᵢ) / (tᵢ₊₁ − tᵢ)',`After ${lastT} h, when shown: C(t) = C(${lastT}) × 2^(−(t − ${lastT}) / 3.5)`],
+    parameters:[`Observed reference interpolation: 0 ≤ t ≤ ${lastT} h. Beyond that, the displayed continuation uses an estimated 3.5 h half-life and is starred.`],
+    note:'t is hours since administration; C is ng/mL. Adult 18 mg group profile with an unobserved estimated continuation, not a personal measurement. Published-only views omit the continuation.',
   };
 }

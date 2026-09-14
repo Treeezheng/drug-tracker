@@ -385,7 +385,26 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
   }
   const db = new DatabaseSync(dbPath, { timeout: 5000 });
   if (dbPath !== ':memory:') chmodSync(dbPath, 0o600);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+  try {
+    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    const deadline = performance.now() + 5000;
+    for (;;) {
+      try {
+        // A later attempt must not receive another full five-second lock wait.
+        const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+        db.exec(`PRAGMA busy_timeout = ${remaining}; PRAGMA journal_mode = WAL;`);
+        db.exec('PRAGMA busy_timeout = 5000;');
+        break;
+      }
+      catch (error) {
+        // Simultaneous openers can receive SQLITE_BUSY during the journal-mode
+        // transition even with a busy handler. Retry only this startup step.
+        const remaining = deadline - performance.now();
+        if (error.errcode !== 5 || remaining <= 0) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(25, remaining)));
+      }
+    }
+  } catch (error) { db.close(); throw error; }
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL) STRICT');
   const migrationDir = join(ROOT, 'server', 'migrations');
   for (const version of readdirSync(migrationDir).filter((name) => name.endsWith('.sql')).sort()) {
@@ -429,6 +448,14 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
       throw new ApiError(401, 'The active account changed. Sign in to the account that owns these records before continuing.');
     }
     return user;
+  }
+  function authenticatedTransaction(req, expectedOwner, operation) {
+    return transaction(() => {
+      // A different local process may revoke this session while BEGIN waits for
+      // its write lock. Preserve the selected owner and check inside the lock.
+      if (requireUser(req).id !== expectedOwner) throw new ApiError(401, 'The active account changed. Sign in again before continuing.');
+      return operation();
+    });
   }
   function cookie(res, token = '') {
     res.setHeader('Set-Cookie', `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${token ? SESSION_SECONDS : 0}`);
@@ -509,10 +536,10 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
     if (row && row.owner_id !== owner) throw new ApiError(404, 'Record not found.');
     return row;
   }
-  function putEntity(kind, id, owner, data) {
+  function putEntity(kind, id, owner, data, req) {
     const { payload, expectedRevision } = validate(kind, id, data);
     const encoded = canonical(payload);
-    return transaction(() => {
+    return authenticatedTransaction(req, owner, () => {
       if (kind === 'favorites') cleanupFavorites(owner);
       const row = getEntity(kind, id, owner);
       if (kind === 'favorites' && row?.deleted) {
@@ -546,8 +573,8 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
       return record(getEntity(kind, id, owner));
     });
   }
-  function deleteEntity(kind, id, owner, data) {
-    return transaction(() => {
+  function deleteEntity(kind, id, owner, data, req) {
+    return authenticatedTransaction(req, owner, () => {
       if (kind === 'favorites') cleanupFavorites(owner);
       const row = getEntity(kind, id, owner);
       if (!row) throw new ApiError(404, 'Record not found.');
@@ -666,13 +693,13 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
       }
       if (path.startsWith('/api/')) {
         const user = requireUser(req);
-        if (path === '/api/data' && method === 'GET') return send(res, 200, transaction(() => { cleanupFavorites(user.id); return dataFor(user.id); }));
+        if (path === '/api/data' && method === 'GET') return send(res, 200, authenticatedTransaction(req, user.id, () => { cleanupFavorites(user.id); return dataFor(user.id); }));
         if (path === '/api/import' && method === 'POST') {
           const body = await readJson(req, false, IMPORT_LIMIT);
           requireUser(req);
           if (!['merge', 'replace'].includes(body.mode)) bad('Choose merge or replace for the import.');
           const prepared = prepareImport(body.backup, user.id);
-          const result = transaction(() => {
+          const result = authenticatedTransaction(req, user.id, () => {
             // Check every destination before deleting anything in replace mode.
             // Foreign-owned IDs are never treated as attachable records.
             for (const record of prepared.records) getEntity(record.kind, record.id, user.id);
@@ -692,7 +719,7 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
           return send(res, 200, result);
         }
         if (path === '/api/export' && method === 'GET') {
-          const snapshot = transaction(() => { cleanupFavorites(user.id); return ({
+          const snapshot = authenticatedTransaction(req, user.id, () => { cleanupFavorites(user.id); return ({
             format: 'dose-timeline-backup', schemaVersion: 1, exportedAt: now(), user: publicUser(user),
             data: dataFor(user.id),
             revisions: db.prepare('SELECT * FROM entity_revisions WHERE owner_id = ? ORDER BY kind,entity_id,revision').all(user.id).map((row) => ({ kind: row.kind, id: row.entity_id, revision: row.revision, data: JSON.parse(row.payload), deleted: Boolean(row.deleted), recordedAt: row.recorded_at })),
@@ -707,8 +734,7 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
           textField(body.password, 'password', 256);
           if (!(await passwordMatches(body.password, user.password_hash))) throw new ApiError(401, 'Password is incorrect.');
           // A concurrently reset password invalidates confirmation from an old session.
-          transaction(() => {
-            requireUser(req);
+          authenticatedTransaction(req, user.id, () => {
             const fresh = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id);
             if (!fresh || fresh.password_hash !== user.password_hash) throw new ApiError(401, 'Sign in again before deleting this account.');
             db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
@@ -718,14 +744,14 @@ export async function createDoseServer({ dbPath = process.env.DOSE_DB_PATH || jo
         }
         if (path === '/api/profile' && method === 'PUT') {
           const body = await readJson(req); requireUser(req);
-          return send(res, 200, putEntity('profile', user.id, user.id, body));
+          return send(res, 200, putEntity('profile', user.id, user.id, body, req));
         }
         const match = /^\/api\/(doses|scenarios|favorites|checkins|inventory)\/([A-Za-z0-9_-]{1,100})$/.exec(path);
         if (match && ['PUT', 'DELETE'].includes(method)) {
           const [, kind, id] = match;
           const body = await readJson(req);
           requireUser(req);
-          return send(res, 200, method === 'PUT' ? putEntity(kind, id, user.id, body) : deleteEntity(kind, id, user.id, body));
+          return send(res, 200, method === 'PUT' ? putEntity(kind, id, user.id, body, req) : deleteEntity(kind, id, user.id, body, req));
         }
         throw new ApiError(404, 'Endpoint not found.');
       }

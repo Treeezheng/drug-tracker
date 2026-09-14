@@ -17,7 +17,7 @@ test('Heroku entry point requires PostgreSQL and the router PORT, never uses loc
   assert.equal(options.serverOptions.dbPath, undefined);
   for (const changed of [{ DATABASE_URL: '' }, { DYNO: '' }, { PORT: '0' }, { PORT: '65536' }, { PORT: '3e3' },
     { CLOUD_DB_PATH: '/tmp/ignored.sqlite' }, { CLOUD_ALLOW_INSECURE_LOOPBACK: '1' }, { CLOUD_ADMIN_PASSWORD: 'never-log-this' },
-    { DRUG_POSTGRES_ALLOW_INSECURE_LOOPBACK: '1' }]) assert.throws(() => herokuOptions({ ...env, ...changed }));
+    { DRUG_POSTGRES_ALLOW_INSECURE_LOOPBACK: '1' }, { CLOUD_PROXY_MODE: 'caddy-loopback' }]) assert.throws(() => herokuOptions({ ...env, ...changed }));
 });
 test('PostgreSQL TLS validates certificates and names; URL overrides cannot disable it or change the endpoint', async t => {
   const config = postgresConfiguration({ databaseUrl: `${DATABASE_URL}?sslmode=disable&sslrootcert=/unsafe&sslcert=/key&sslkey=/key&uselibpqcompat=true` });

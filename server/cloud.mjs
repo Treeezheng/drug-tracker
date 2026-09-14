@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { VaultStoreError } from './vault-store.mjs';
 import { CloudError } from './cloud-errors.mjs';
 import { openCloudDatabase, openCloudSqlite } from './cloud-sqlite.mjs';
-import { operationGate, rateSource } from './cloud-limits.mjs';
+import { operationGate, rateSource, requireLoopbackProxy } from './cloud-limits.mjs';
 import { SESSION_SECONDS } from './cloud-session.mjs';
 import { createOpaqueService } from './cloud-opaque.mjs';
 import { accountPasswordError } from '../src/lib/password-policy.mjs';
@@ -17,6 +17,7 @@ export { CloudError } from './cloud-errors.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PREFIX = '/drug/api';
 const VAULT_BODY_LIMIT = Math.ceil(16_000_016 * 4 / 3) + 4096;
+const OPAQUE_POST_PATHS = new Set(['/register/start', '/register/finish', '/login/start', '/login/finish', '/reauth/start', '/reauth/finish', '/recover/start', '/recover/authorize', '/recover/finish', '/change/start', '/change/finish', '/rotate-recovery', '/migrate/start', '/migrate/finish']);
 const scryptAsync = promisify(scrypt);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const publicUser = value => ({ id: value.id, name: value.name, username: value.username, authMode: value.auth_mode ?? 'legacy-scrypt' });
@@ -55,14 +56,14 @@ async function passwordMatches(value, encoded) {
 function configuration({ dbPath, databaseUrl, origin, allowInsecureLoopback = false, proxyMode } = {}) {
   if (databaseUrl !== undefined && dbPath !== undefined) invalid('Choose PostgreSQL or a dedicated SQLite path, not both.');
   if (databaseUrl === undefined && (typeof dbPath !== 'string' || !isAbsolute(dbPath))) invalid('Choose an explicit absolute CLOUD_DB_PATH for the cloud edition.');
-  if (proxyMode !== undefined && proxyMode !== 'heroku') invalid('Unsupported cloud proxy mode.');
+  if (proxyMode !== undefined && !['heroku', 'caddy-loopback'].includes(proxyMode)) invalid('Unsupported cloud proxy mode.');
   if (typeof origin !== 'string') invalid('Configure an exact CLOUD_ORIGIN before starting the cloud edition.');
   let parsed;
   try { parsed = new URL(origin); } catch { invalid('Invalid cloud origin.'); }
   if (parsed.origin !== origin || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') invalid('Cloud origin must contain only the scheme and exact host.');
   const insecure = parsed.protocol === 'http:';
   if (parsed.protocol !== 'https:' && !(allowInsecureLoopback === true && insecure && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname))) invalid('The cloud origin must use HTTPS; HTTP is allowed only by an explicit loopback development flag.');
-  if (proxyMode === 'heroku' && insecure) invalid('The Heroku cloud origin must use HTTPS.');
+  if (proxyMode !== undefined && insecure) invalid('The proxied cloud origin must use HTTPS.');
   return { dbPath: dbPath ? resolve(dbPath) : undefined, databaseUrl, origin, host: parsed.host, secure: !insecure, proxyMode };
 }
 
@@ -167,6 +168,9 @@ export async function createCloudServer(options = {}) {
   if ([attemptLimit, windowMs, registrationLimit, registrationWindowMs].some(value => !Number.isSafeInteger(value) || value < 1)) { await repository.close(); invalid('Invalid account rate limit.'); }
   const attempts = new Map();
   const reserveAuth = operationGate(8, 'Account requests are busy. Please retry in a moment.');
+  // One unverified large upload may coexist with one authenticated vault operation.
+  // It never holds the protected slot while waiting for request bytes or proof.
+  const reserveOpaqueBody = operationGate(1, 'An account upload is in progress. Please retry in a moment.');
   const reserveVault = operationGate(1, 'An encrypted save or download is in progress. Please retry in a moment.');
   let verifying = 0, closed = false;
   async function rateLimit(kind, subject, limitMultiplier = 1) {
@@ -216,7 +220,8 @@ export async function createCloudServer(options = {}) {
   }
   function guards(req) {
     // Heroku terminates TLS. This transport hint never supplies identity, origin, host or rate-limit keys.
-    if (config.proxyMode === 'heroku' && req.headers['x-forwarded-proto'] !== 'https') throw new CloudError(403, 'Use the configured HTTPS address.');
+    if (config.proxyMode === 'caddy-loopback') requireLoopbackProxy(req);
+    if (config.proxyMode !== undefined && req.headers['x-forwarded-proto'] !== 'https') throw new CloudError(403, 'Use the configured HTTPS address.');
     if (req.headers.host !== config.host) throw new CloudError(403, 'Untrusted request host.');
     if (req.headers.origin !== undefined && req.headers.origin !== config.origin) throw new CloudError(403, 'Untrusted request origin.');
     if (req.headers['sec-fetch-site'] === 'cross-site') throw new CloudError(403, 'Cross-site requests are not allowed.');
@@ -289,13 +294,23 @@ export async function createCloudServer(options = {}) {
       }
       if (path.startsWith(`${PREFIX}/auth/opaque/`)) {
         const opaquePath = path.slice(`${PREFIX}/auth/opaque`.length);
+        if (!(opaquePath === '/config' && req.method === 'GET') && !(req.method === 'POST' && OPAQUE_POST_PATHS.has(opaquePath))) throw new CloudError(404, 'This authentication endpoint does not exist.');
         const large = ['/register/finish', '/recover/finish', '/change/finish', '/migrate/finish', '/rotate-recovery', '/recover/authorize'].includes(opaquePath);
-        completeOperation = (large ? reserveVault : reserveAuth)(req, res);
+        completeOperation = (large ? reserveOpaqueBody : reserveAuth)(req, res);
         if (opaquePath.startsWith('/migrate/') && options.allowLegacyRegistration !== true) throw new CloudError(410, 'Older test accounts are no longer supported. Create a new account.');
+        const source = rateSource(req, config.proxyMode);
+        // Separate from valid-account attempt budgets, and charged before any body read.
+        if (req.method === 'POST') await rateLimit('login', `opaque-request-source:${source}`, 16);
         const authenticated = /^\/(reauth|change|migrate)\//.test(opaquePath) || opaquePath === '/rotate-recovery';
         const user = authenticated ? await owner(req) : undefined;
         const input = req.method === 'GET' ? undefined : await body(req, large ? VAULT_BODY_LIMIT : 16_384);
-        const result = await opaque.handle({ path: opaquePath, method: req.method, input, source: rateSource(req, config.proxyMode), user, sessionHash: user ? hash(token(req)) : undefined });
+        const withVault = async operation => {
+          // The protocol invokes this only after consuming and validating its proof.
+          // Keep the slot through response flush, including a login's large download.
+          const completeVault = reserveVault(req, res);
+          try { return await operation(); } finally { completeVault(); }
+        };
+        const result = await opaque.handle({ path: opaquePath, method: req.method, input, source, user, sessionHash: user ? hash(token(req)) : undefined, withVault });
         if (result.session) cookie(res, result.session.value);
         return send(res, result.status, result.body);
       }
@@ -487,7 +502,9 @@ async function cli() {
   if (process.env.CLOUD_ADMIN_PASSWORD) invalid('Remove CLOUD_ADMIN_PASSWORD before starting. Accounts register securely in the webpage.');
   const port = Number(process.env.CLOUD_PORT || 4312);
   if (!Number.isInteger(port) || port < 1 || port > 65535) invalid('Choose a valid CLOUD_PORT.');
-  const { server } = await createCloudServer({ dbPath, origin: process.env.CLOUD_ORIGIN, allowInsecureLoopback: process.env.CLOUD_ALLOW_INSECURE_LOOPBACK === '1', distDir: process.env.CLOUD_DIST_PATH || join(ROOT, 'dist') });
+  const proxyMode = process.env.CLOUD_PROXY_MODE;
+  if (proxyMode !== undefined && proxyMode !== 'caddy-loopback') invalid('The loopback cloud entry point supports only CLOUD_PROXY_MODE=caddy-loopback.');
+  const { server } = await createCloudServer({ dbPath, origin: process.env.CLOUD_ORIGIN, proxyMode, allowInsecureLoopback: process.env.CLOUD_ALLOW_INSECURE_LOOPBACK === '1', distDir: process.env.CLOUD_DIST_PATH || join(ROOT, 'dist') });
   server.listen(port, '127.0.0.1', () => process.stdout.write(`Drug Tracker cloud listening on 127.0.0.1:${port}/drug/\n`));
   server.on('error', () => { process.stderr.write('Drug Tracker cloud could not start.\n'); process.exitCode = 1; });
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { server.close(() => { process.exitCode = 0; }); server.closeIdleConnections(); });

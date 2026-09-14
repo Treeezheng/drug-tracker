@@ -1,6 +1,6 @@
 # Security policy
 
-Drug Tracker is an experimental personal tracking and simulation application. The current `main` branch is maintained; there is no security certification or independently audited release.
+Drug Tracker is an experimental personal tracking and simulation application. The current `main` branch is maintained; there is no security certification or independent professional audit of a release.
 
 ## Report a vulnerability privately
 
@@ -19,3 +19,5 @@ The recovery code is an alternative credential, not MFA. Users must acknowledge 
 A website operator or a compromised release pipeline can change JavaScript delivered to an unlocked browser. Repository scanning, HTTPS, OPAQUE and client-side encryption do not eliminate that threat. OPAQUE authentication records and the server setup secret are sensitive: compromise can enable offline password guessing. Protect GitHub and hosting accounts with strong independent credentials and MFA. Keep hosting, database and OPAQUE setup secrets out of the repository and out of frontend build variables. Do not regenerate an existing database’s setup secret as an ordinary restart or an unplanned repair.
 
 The [review history](docs/security-reviews.md) identifies the user-supplied Claude report and the implementation-side OpenAI Codex review without claiming vendor approval. The [OPAQUE candidate review](docs/opaque-release-review-2026-09-13.md) identifies the new protocol scope and pending final release evidence. Earlier [client](docs/security-review-client-2026-09-13.md), [server](docs/security-review-server-2026-09-13.md) and [legal](docs/privacy-legal-review-2026-09-13.md) reviews describe their own checked versions and limits; they are not certifications. A source change does not establish which build is currently deployed.
+
+The [2026-09-14 two-round review](docs/independent-security-review-2026-09-14.md) adds fresh-agent server/client/compliance checks, efficiency repairs and a synthetic PostgreSQL restoration drill. Final source, CI, provenance and production-file verification belong to that release's pull-request evidence; no AI review constitutes a guarantee that all vulnerabilities or legal obligations have been found.

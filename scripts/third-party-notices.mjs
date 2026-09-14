@@ -131,7 +131,7 @@ export function leadingComments(text) {
 
 const repository = pkg => (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url)?.replace(/^git\+/, '').replace(/\.git$/, '')
 
-export function generateNotices(root) {
+export function generateNotices(root, { platform = process.platform, arch = process.arch } = {}) {
   root = fs.realpathSync(root)
   const lockFile = path.join(root, 'pnpm-lock.yaml'), lockBytes = readNoticeBytes(lockFile)
   const lock = normalizeText(lockBytes, lockFile)
@@ -172,26 +172,93 @@ export function generateNotices(root) {
     blocks.push(`PACKAGE ${id}\nDeclared package license: ${typeof pkg.license === 'string' ? pkg.license : JSON.stringify(pkg.license)}\n${notices.map(notice => `\nSOURCE ${notice.source}\n\n${notice.text}`).join('\n')}`)
   }
   const scope = `${packages.length} installed packages; ${sections} notice sections; ${sourceHeaders} hash-wasm source headers`
-  const txt = `THIRD-PARTY NOTICES\n\nThird-party packages retain their original licenses. The project's 0BSD license does not replace them.\nGenerated offline from the reachable installed runtime and development dependency graph, verified against pnpm-lock.yaml.\nScope: ${scope}.\nInstallation platform: ${process.platform}/${process.arch}. Uninstalled optional platform packages and stale package-store entries are excluded.\nLockfile SHA-256: ${lockHash}\n\nThese are the legal texts and source notices supplied in the installed packages. Native esbuild/rolldown artifacts without a notice use the verified same-version parent package's supplied notices. pg-types/pgpass notices come from their README License sections. hash-wasm's embedded implementation notices are preserved from leading source comments. This inventory does not assert an independent audit of upstream or embedded components.\nRegenerate: node scripts/third-party-notices.mjs\nCheck this installation: node scripts/third-party-notices.mjs --check\n\n${blocks.join('\n' + '='.repeat(78) + '\n\n')}`
-  const md = `# Third-party notices\n\nOriginal application code is under 0BSD. Third-party dependencies retain their own licenses; the 0BSD grant does not replace them.\n\nThe interface uses Inter and IBM Plex Mono under the SIL Open Font License 1.1. The installed OPAQUE package, hash-wasm, React, Lucide, Temporal, and other dependencies retain their supplied licenses and copyright notices. Password dictionary dataset notices and hash-wasm's embedded implementation notices are included.\n\n[The distributed notices](public/THIRD_PARTY_NOTICES.txt) contain ${scope}. They cover the installed runtime and development dependency graph on ${process.platform}/${process.arch}, with every package version checked against the lockfile. Uninstalled optional platform packages and unreachable old package-store entries are excluded; development packages are not necessarily shipped in the browser.\n\nRegenerate offline after a frozen-lockfile installation with \`node scripts/third-party-notices.mjs\`; verify the same installation with \`node scripts/third-party-notices.mjs --check\`. The script reads supplied legal files, complete README license sections for pg-types/pgpass, and hash-wasm source headers. Native esbuild/rolldown packages without their own notice use the same-version parent package's notices after checking the repository and declared license. Missing or unrecognized license sources cause generation to fail. No package scripts or network requests are run. This inventory is not an independent license audit of embedded upstream components.\n\nLockfile SHA-256: \`${lockHash}\`.\n\nExternal medical documents are linked as references; their copyrights and trademarks remain with their owners. This project does not grant rights to those external materials.\n`
+  const txt = `THIRD-PARTY NOTICES\n\nThird-party packages retain their original licenses. The project's 0BSD license does not replace them.\nGenerated offline from the reachable installed runtime and development dependency graph, verified against pnpm-lock.yaml.\nScope: ${scope}.\nInstallation platform: ${platform}/${arch}. Uninstalled optional platform packages and stale package-store entries are excluded.\nLockfile SHA-256: ${lockHash}\n\nThese are the legal texts and source notices supplied in the installed packages. Native esbuild/rolldown artifacts without a notice use the verified same-version parent package's supplied notices. pg-types/pgpass notices come from their README License sections. hash-wasm's embedded implementation notices are preserved from leading source comments. This inventory does not assert an independent audit of upstream or embedded components.\nRegenerate: node scripts/third-party-notices.mjs\nCheck this installation: node scripts/third-party-notices.mjs --check\n\n${blocks.join('\n' + '='.repeat(78) + '\n\n')}`
+  const md = `# Third-party notices\n\nOriginal application code is under 0BSD. Third-party dependencies retain their own licenses; the 0BSD grant does not replace them.\n\nThe interface uses Inter and IBM Plex Mono under the SIL Open Font License 1.1. The installed OPAQUE package, hash-wasm, React, Lucide, Temporal, and other dependencies retain their supplied licenses and copyright notices. Password dictionary dataset notices and hash-wasm's embedded implementation notices are included.\n\n[The distributed notices](public/THIRD_PARTY_NOTICES.txt) contain ${scope}. They cover the installed runtime and development dependency graph on ${platform}/${arch}, with every package version checked against the lockfile. Uninstalled optional platform packages and unreachable old package-store entries are excluded; development packages are not necessarily shipped in the browser.\n\nRegenerate offline after a frozen-lockfile installation with \`node scripts/third-party-notices.mjs\`; verify the same installation with \`node scripts/third-party-notices.mjs --check\`. The script reads supplied legal files, complete README license sections for pg-types/pgpass, and hash-wasm source headers. Native esbuild/rolldown packages without their own notice use the same-version parent package's notices after checking the repository and declared license. Missing or unrecognized license sources cause generation to fail. No package scripts or network requests are run. This inventory is not an independent license audit of embedded upstream components.\n\nLockfile SHA-256: \`${lockHash}\`.\n\nExternal medical documents are linked as references; their copyrights and trademarks remain with their owners. This project does not grant rights to those external materials.\n`
   // Preserve upstream words and indentation, but omit trailing line whitespace
   // from the distributed inventory so generated files pass whitespace checks.
   const cleanLines = text => text.split('\n').map(line => line.trimEnd()).join('\n')
   return { txt: cleanLines(txt), md: cleanLines(md), count: packages.length, sections, sourceHeaders, ids: packages.map(entry => entry.id) }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.slice(2).some(arg => arg !== '--check')) throw new Error('Usage: node scripts/third-party-notices.mjs [--check]')
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const result = generateNotices(root)
-  for (const [relative, content] of [['public/THIRD_PARTY_NOTICES.txt', result.txt], ['THIRD_PARTY_NOTICES.md', result.md]]) {
-    const filename = path.join(root, relative)
-    if (process.argv.includes('--check')) {
-      let existing
-      try { existing = readNoticeBytes(filename).toString('utf8') }
-      catch (error) { if (error.code !== 'ENOENT') throw error }
-      if (existing !== content) throw new Error(`Stale notices: ${relative}`)
-    } else fs.writeFileSync(filename, content)
+function noticeInventory(text) {
+  const first = text.indexOf('\n\nPACKAGE ')
+  if (first < 0) throw new Error('Malformed notice inventory')
+  const header = text.slice(0, first)
+  const platform = /^Installation platform: ([a-z0-9_-]+)\/([a-z0-9_-]+)\./m.exec(header)
+  const scope = /^Scope: (\d+ installed packages; \d+ notice sections; \d+ hash-wasm source headers)\.$/m.exec(header)
+  if (!platform || !scope) throw new Error('Missing notice scope or installation platform')
+  const entries = new Map()
+  let sections = 0, sourceHeaders = 0
+  for (const block of text.slice(first + 2).split('\n' + '='.repeat(78) + '\n\n')) {
+    const id = /^PACKAGE ([^\n]+)\nDeclared package license: [^\n]+\n/.exec(block)?.[1]
+    if (!id || entries.has(id)) throw new Error('Malformed or duplicate notice package')
+    entries.set(id, block)
+    sections += [...block.matchAll(/^SOURCE /gm)].length
+    if (id.startsWith('hash-wasm@')) sourceHeaders += [...block.matchAll(/^SOURCE src\/[^\n]+ — leading source notice$/gm)].length
   }
-  console.log(`${process.argv.includes('--check') ? 'Verified' : 'Generated'} ${result.count} packages, ${result.sections} notice sections, ${result.sourceHeaders} embedded source headers.`)
+  const actual = `${entries.size} installed packages; ${sections} notice sections; ${sourceHeaders} hash-wasm source headers`
+  if (actual !== scope[1]) throw new Error('Notice inventory counts do not match its contents')
+  return { entries, scope: actual, platform: platform[1], arch: platform[2], header: header.replace(actual, '<scope>').replace(`${platform[1]}/${platform[2]}`, '<platform>') }
+}
+
+function lockPlatformRules(lock) {
+  const section = lock.match(/^packages:\n([\s\S]*?)(?=^snapshots:)/m)?.[1]
+  if (!section) throw new Error('Expected pnpm lockfile packages and snapshots sections')
+  const headings = [...section.matchAll(/^  (?:'([^']+)'|([^ '\n][^\n]*)):\s*$/gm)]
+  return new Map(headings.map((heading, index) => [heading[1] ?? heading[2], section.slice(heading.index + heading[0].length, headings[index + 1]?.index)]))
+}
+
+function incompatibleWith(body, { platform, arch }) {
+  // Only explicit OS/CPU differences justify missing package notices. In
+  // particular, an optional dependency without these constraints is not skipped.
+  const matches = (field, target) => {
+    const line = new RegExp(`^    ${field}: (.+)$`, 'm').exec(body)?.[1]
+    if (!line) return true
+    if (!/^\[[^\]\n]*\]$/.test(line)) throw new Error(`Unsupported lockfile ${field} constraint`)
+    const values = line.slice(1, -1).split(',').map(value => value.trim().replace(/^(['"])(.*)\1$/, '$2'))
+    if (values.some(value => !/^!?[a-z0-9_*-]+$/.test(value))) throw new Error(`Unsupported lockfile ${field} constraint`)
+    const positive = values.filter(value => !value.startsWith('!'))
+    return !values.includes(`!${target}`) && (!positive.length || positive.includes('*') || positive.includes(target))
+  }
+  return !matches('os', platform) || !matches('cpu', arch)
+}
+
+/** Read-only CI check. Shared packages must match in full; only explicitly
+ * incompatible platform packages may differ. Noninstalled platform legal text
+ * is not re-audited; same-platform --check remains the complete byte comparison. */
+export function checkNotices(root, { portable = false, platform = process.platform, arch = process.arch } = {}) {
+  const result = generateNotices(root, { platform, arch })
+  const txt = readNoticeBytes(path.join(root, 'public/THIRD_PARTY_NOTICES.txt')).toString('utf8')
+  const md = readNoticeBytes(path.join(root, 'THIRD_PARTY_NOTICES.md')).toString('utf8')
+  if (txt === result.txt && md === result.md) return result
+  if (!portable) throw new Error('Stale notices: regenerate with node scripts/third-party-notices.mjs')
+  const saved = noticeInventory(txt), current = noticeInventory(result.txt)
+  if (saved.platform === current.platform && saved.arch === current.arch) throw new Error('Stale notices for this installation platform')
+  const rules = lockPlatformRules(readText(path.join(root, 'pnpm-lock.yaml')))
+  if (saved.header !== current.header) throw new Error('Stale notice header or lockfile hash')
+  const normalizeSummary = (text, inventory) => text.replace(inventory.scope, '<scope>').replace(`on ${inventory.platform}/${inventory.arch},`, 'on <platform>,')
+  if (normalizeSummary(md, saved) !== normalizeSummary(result.md, current)) throw new Error('Stale notices: THIRD_PARTY_NOTICES.md')
+  for (const [id, block] of saved.entries) {
+    if (!rules.has(id)) throw new Error(`Notice package is missing from lockfile: ${id}`)
+    if (current.entries.has(id)) {
+      if (block !== current.entries.get(id)) throw new Error(`Stale notice text: ${id}`)
+    } else if (!incompatibleWith(rules.get(id), current)) throw new Error(`Unexpected notice package absent from this installation: ${id}`)
+  }
+  for (const id of current.entries.keys()) {
+    if (!saved.entries.has(id) && !incompatibleWith(rules.get(id), saved)) throw new Error(`Missing notice package: ${id}`)
+  }
+  return result
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2)
+  if (args.length > 1 || args.some(arg => !['--check', '--check-portable'].includes(arg))) throw new Error('Usage: node scripts/third-party-notices.mjs [--check | --check-portable]')
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+  const checking = args.length > 0
+  const result = checking ? checkNotices(root, { portable: args[0] === '--check-portable' }) : generateNotices(root)
+  if (!checking) {
+    fs.writeFileSync(path.join(root, 'public/THIRD_PARTY_NOTICES.txt'), result.txt)
+    fs.writeFileSync(path.join(root, 'THIRD_PARTY_NOTICES.md'), result.md)
+  }
+  console.log(`${checking ? 'Verified' : 'Generated'} ${result.count} packages, ${result.sections} notice sections, ${result.sourceHeaders} embedded source headers${args[0] === '--check-portable' ? ' (cross-platform check; uninstalled platform-only notices are not re-audited)' : ''}.`)
 }

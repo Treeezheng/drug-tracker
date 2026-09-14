@@ -5,6 +5,12 @@ import { validateVaultWrite, VaultStoreError } from './vault-store.mjs';
 import { cappedSessionExpiry, SESSION_SECONDS } from './cloud-session.mjs';
 import { initializeOpaquePostgres, opaquePostgresMethods, validateOrdinaryVaultKey } from './cloud-opaque-postgres.mjs';
 
+const EXPIRED_SESSION_CLEANUP = `WITH expired AS (
+  SELECT token_hash FROM drug_tracker.sessions
+  WHERE expires_at<=floor(extract(epoch FROM clock_timestamp())*1000)::bigint
+  ORDER BY expires_at LIMIT 1000 FOR UPDATE SKIP LOCKED
+) DELETE FROM drug_tracker.sessions s USING expired e WHERE s.token_hash=e.token_hash`;
+
 /** Ignore URL TLS overrides: pg's URL parser otherwise replaces the verified ssl object. */
 export function postgresConfiguration({ databaseUrl, databaseCaPath, allowInsecurePostgresLoopback = false, databasePoolSize = 4 } = {}) {
   let parsed;
@@ -90,7 +96,8 @@ export async function openCloudPostgres(options) {
           UPDATE drug_tracker.meta SET version=2 WHERE singleton=1;`);
       }
       if (!meta || meta.version < 3) await initializeOpaquePostgres(client);
-      for (const row of (await client.query('SELECT token_hash,created_at,expires_at FROM drug_tracker.sessions')).rows) {
+      await client.query(EXPIRED_SESSION_CLEANUP);
+      for (const row of (await client.query('SELECT token_hash,created_at,expires_at FROM drug_tracker.sessions WHERE expires_at>floor(extract(epoch FROM clock_timestamp())*1000)::bigint')).rows) {
         const capped = cappedSessionExpiry(row);
         if (capped < Number(row.expires_at)) await client.query('UPDATE drug_tracker.sessions SET expires_at=$1 WHERE token_hash=$2', [capped, row.token_hash]);
       }
@@ -112,6 +119,8 @@ export async function openCloudPostgres(options) {
   const addSession = async (client, owner, value) => {
     await client.query('INSERT INTO drug_tracker.sessions VALUES ($1,$2,$3,$4)', [value.tokenHash, owner, value.expiresAt, new Date().toISOString()]);
   };
+  // Finish global expiry cleanup before account/session locks to preserve lock ordering.
+  const cleanupExpiredSessions = () => pool.query(EXPIRED_SESSION_CLEANUP);
   const snapshot = row => row ? {
     ownerId: row.owner_id, revision: Number(row.revision), dataEnvelope: row.data_envelope,
     keyEnvelope: row.key_envelope, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -123,7 +132,7 @@ export async function openCloudPostgres(options) {
     return { currentSession: { createdAt: current.created_at, expiresAt: new Date(Number(current.expires_at)).toISOString() }, activeSessionCount: count, sessionLifetimeHours: SESSION_SECONDS / 3600 };
   };
   return {
-    ...opaquePostgresMethods({pool,transaction,lockOwner,requireSession,addSession,read}),
+    ...opaquePostgresMethods({pool,transaction,lockOwner,requireSession,addSession,read,cleanupExpiredSessions}),
     accountByUsername: async name => (await pool.query('SELECT * FROM drug_tracker.accounts WHERE username=$1', [name])).rows[0] ?? null,
     session: async tokenHash => (await pool.query(sessionQuery, [tokenHash])).rows[0] ?? null,
     securityInfo(owner, tokenHash) {
@@ -136,7 +145,7 @@ export async function openCloudPostgres(options) {
       });
     },
     async register(account, value) {
-      await pool.query('DELETE FROM drug_tracker.sessions WHERE expires_at<=floor(extract(epoch FROM clock_timestamp())*1000)::bigint');
+      await cleanupExpiredSessions();
       try {
         return await transaction(async client => {
           await client.query('INSERT INTO drug_tracker.accounts VALUES ($1,$2,$3,$4,$5)', [account.id, account.username, account.password_hash, account.name, new Date().toISOString()]);
@@ -147,7 +156,7 @@ export async function openCloudPostgres(options) {
     },
     async login(account, value) {
       // Expired-session cleanup must finish before holding an account lock (writes lock account, then session).
-      await pool.query('DELETE FROM drug_tracker.sessions WHERE expires_at<=floor(extract(epoch FROM clock_timestamp())*1000)::bigint');
+      await cleanupExpiredSessions();
       return transaction(async client => {
         const fresh = (await client.query('SELECT * FROM drug_tracker.accounts WHERE id=$1 AND password_hash=$2 FOR SHARE', [account.id, account.password_hash])).rows[0];
         if (!fresh) throw new CloudError(401, 'The account changed. Sign in again.');

@@ -67,7 +67,7 @@ export async function createOpaqueService({repository,serverSetupOverride,work,r
   async function matchingVault(ownerId,sessionHash,expectedRevision){const vault=await repository.readVault(ownerId,sessionHash);if((vault?.revision??0)!==expectedRevision)throw new CloudError(409,'Records changed. Refresh before changing account security.',{currentRevision:vault?.revision??0});return vault;}
   async function accountResult(result){return{status:200,body:{user:publicUser(result.user),vault:result.vault},session:result.session};}
 
-  async function handle({path,method,input,source,user,sessionHash}) {
+  async function handle({path,method,input,source,user,sessionHash,withVault=operation=>operation()}) {
     if(path==='/config'&&method==='GET')return{status:200,body:{protocol:'opaque-v1',serverPublicKey,serverIdentifier:SERVER_ID}};
     if(method!=='POST')throw new CloudError(404,'This authentication endpoint does not exist.');
     return work(async()=>{
@@ -83,9 +83,10 @@ export async function createOpaqueService({repository,serverSetupOverride,work,r
       if(path==='/register/finish'){
         exact(input,['challengeId','registrationRecord','dataEnvelope','keyEnvelope','recoveryAuthHash']);hashValue(input.recoveryAuthHash);
         const row=await take(input.challengeId,'register',source),record=registrationRecord(input.registrationRecord,row.ownerId,row.username),vault=vaultInput(input,0);
-        validateVaultWrite(row.ownerId,vault);const session=newSession();
-        const result=await repository.registerOpaque({challenge:row,registrationRecord:record,vaultInput:vault,recoveryAuthHash:input.recoveryAuthHash},session);
-        return{status:201,body:{user:publicUser(result.user),vault:result.vault},session};
+        validateVaultWrite(row.ownerId,vault);
+        return withVault(async()=>{const session=newSession();
+          const result=await repository.registerOpaque({challenge:row,registrationRecord:record,vaultInput:vault,recoveryAuthHash:input.recoveryAuthHash},session);
+          return{status:201,body:{user:publicUser(result.user),vault:result.vault},session};});
       }
       if(path==='/login/start'){
         exact(input,['username','startLoginRequest']);const loginName=username(input.username);binary(input.startLoginRequest,96);
@@ -97,11 +98,12 @@ export async function createOpaqueService({repository,serverSetupOverride,work,r
       }
       if(path==='/login/finish'){
         exact(input,['challengeId','finishLoginRequest']);const row=await take(input.challengeId,'login',source);finishProof(row,input.finishLoginRequest);
-        if(!row.ownerId)denied();const session=newSession();
-        const fresh=await repository.loginOpaque({ownerId:row.ownerId,authVersion:row.authVersion},session);
-        // A simultaneous revoke may make this read fail; no stale authentication is returned.
-        const vault=await repository.readVault(fresh.id,session.tokenHash);
-        return{status:200,body:{user:publicUser(fresh),vault},session};
+        if(!row.ownerId)denied();
+        return withVault(async()=>{const session=newSession();
+          const fresh=await repository.loginOpaque({ownerId:row.ownerId,authVersion:row.authVersion},session);
+          // A simultaneous revoke may make this read fail; no stale authentication is returned.
+          const vault=await repository.readVault(fresh.id,session.tokenHash);
+          return{status:200,body:{user:publicUser(fresh),vault},session};});
       }
       if(path==='/reauth/start'){
         exact(input,['action','startLoginRequest']);accountOpaque(user);if(!actions.includes(input.action))bad('Invalid authentication purpose.');binary(input.startLoginRequest,96);
@@ -129,41 +131,45 @@ export async function createOpaqueService({repository,serverSetupOverride,work,r
         const stored=fresh?.auth_mode==='opaque-v1'&&/^[a-f0-9]{64}$/.test(fresh.recovery_auth_hash??'')?fresh.recovery_auth_hash:dummyRecovery;
         const matches=timingSafeEqual(Buffer.from(stored,'hex'),Buffer.from(provided,'hex'));
         if(!matches||fresh?.auth_mode!=='opaque-v1')denied();
-        const vault=await repository.recoveryVault(fresh.id,Number(fresh.auth_version),stored),response=registrationResponse(row.payload.registrationRequest,fresh.id);
-        const value=await challenge('recover-commit',{ownerId:fresh.id,username:fresh.username,authVersion:Number(fresh.auth_version),payload:{expectedRecoveryHash:stored,expectedRevision:vault?.revision??0}},source);
-        return{status:200,body:{recoveryGrant:value.challengeId,ownerId:fresh.id,username:fresh.username,registrationResponse:response,vault,expiresAt:value.expiresAt}};
+        return withVault(async()=>{
+          const vault=await repository.recoveryVault(fresh.id,Number(fresh.auth_version),stored),response=registrationResponse(row.payload.registrationRequest,fresh.id);
+          const value=await challenge('recover-commit',{ownerId:fresh.id,username:fresh.username,authVersion:Number(fresh.auth_version),payload:{expectedRecoveryHash:stored,expectedRevision:vault?.revision??0}},source);
+          return{status:200,body:{recoveryGrant:value.challengeId,ownerId:fresh.id,username:fresh.username,registrationResponse:response,vault,expiresAt:value.expiresAt}};});
       }
       if(path==='/recover/finish'){
         exact(input,['recoveryGrant','registrationRecord','expectedRevision','dataEnvelope','keyEnvelope','recoveryAuthHash']);hashValue(input.recoveryAuthHash);
         const row=await take(input.recoveryGrant,'recover-commit',source);if(revision(input.expectedRevision)!==row.payload.expectedRevision)bad('Use the authorized recovery snapshot.');
-        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username),session=newSession();
-        const result=await repository.commitOpaque({kind:'recover',ownerId:row.ownerId,authVersion:row.authVersion,expectedRecoveryHash:row.payload.expectedRecoveryHash,registrationRecord:record,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
-        return accountResult({...result,session});
+        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username);
+        return withVault(async()=>{const session=newSession();
+          const result=await repository.commitOpaque({kind:'recover',ownerId:row.ownerId,authVersion:row.authVersion,expectedRecoveryHash:row.payload.expectedRecoveryHash,registrationRecord:record,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
+          return accountResult({...result,session});});
       }
       if(path==='/change/start'){
         exact(input,['reauthGrant','registrationRequest','expectedRevision']);accountOpaque(user);binary(input.registrationRequest,32);revision(input.expectedRevision);
-        const row=await grant(input.reauthGrant,'change-password',user,sessionHash,source);await matchingVault(user.id,sessionHash,input.expectedRevision);
+        const row=await grant(input.reauthGrant,'change-password',user,sessionHash,source);await withVault(()=>matchingVault(user.id,sessionHash,input.expectedRevision));
         const response=registrationResponse(input.registrationRequest,user.id),value=await challenge('change',{ownerId:user.id,username:row.username,authVersion:row.authVersion,sessionHash,payload:{expectedRevision:input.expectedRevision}},source);
         return{status:200,body:{...value,ownerId:user.id,username:row.username,registrationResponse:response}};
       }
       if(path==='/change/finish'){
         exact(input,['challengeId','registrationRecord','expectedRevision','dataEnvelope','keyEnvelope']);accountOpaque(user);const row=await take(input.challengeId,'change',source);await checkBound(row,user,sessionHash);
         if(revision(input.expectedRevision)!==row.payload.expectedRevision)bad('Use the authorized account snapshot.');
-        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username),session=newSession();
-        const result=await repository.commitOpaque({kind:'change',ownerId:user.id,authVersion:row.authVersion,sessionHash,registrationRecord:record,vaultInput:vaultInput(input)},session);
-        return accountResult({...result,session});
+        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username);
+        return withVault(async()=>{const session=newSession();
+          const result=await repository.commitOpaque({kind:'change',ownerId:user.id,authVersion:row.authVersion,sessionHash,registrationRecord:record,vaultInput:vaultInput(input)},session);
+          return accountResult({...result,session});});
       }
       if(path==='/rotate-recovery'){
         exact(input,['reauthGrant','expectedRevision','dataEnvelope','keyEnvelope','recoveryAuthHash']);accountOpaque(user);hashValue(input.recoveryAuthHash);
-        const row=await grant(input.reauthGrant,'rotate-recovery',user,sessionHash,source),session=newSession();
-        const result=await repository.commitOpaque({kind:'rotate-recovery',ownerId:user.id,authVersion:row.authVersion,sessionHash,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
-        return accountResult({...result,session});
+        const row=await grant(input.reauthGrant,'rotate-recovery',user,sessionHash,source);
+        return withVault(async()=>{const session=newSession();
+          const result=await repository.commitOpaque({kind:'rotate-recovery',ownerId:user.id,authVersion:row.authVersion,sessionHash,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
+          return accountResult({...result,session});});
       }
       if(path==='/migrate/start'){
         exact(input,['legacyPassword','registrationRequest','expectedRevision']);if(!user||(user.auth_mode??'legacy-scrypt')!=='legacy-scrypt')denied();
         if(typeof input.legacyPassword!=='string'||!input.legacyPassword||input.legacyPassword.length>256)bad('Enter the old account password.');binary(input.registrationRequest,32);revision(input.expectedRevision);
         await rateLimit('login',`account:${user.username}`);if(!(await verifyLegacyPassword(input.legacyPassword,user.password_hash)))throw new CloudError(403,'The old account password is incorrect.');
-        await matchingVault(user.id,sessionHash,input.expectedRevision);
+        await withVault(()=>matchingVault(user.id,sessionHash,input.expectedRevision));
         const response=registrationResponse(input.registrationRequest,user.id),value=await challenge('migrate',{ownerId:user.id,username:user.username,authVersion:Number(user.auth_version??1),sessionHash,payload:{expectedRevision:input.expectedRevision,expectedLegacyHash:user.password_hash}},source);
         return{status:200,body:{...value,ownerId:user.id,username:user.username,registrationResponse:response}};
       }
@@ -171,9 +177,10 @@ export async function createOpaqueService({repository,serverSetupOverride,work,r
         exact(input,['challengeId','registrationRecord','expectedRevision','dataEnvelope','keyEnvelope','recoveryAuthHash']);hashValue(input.recoveryAuthHash);
         const row=await take(input.challengeId,'migrate',source);if(!user||row.ownerId!==user.id||row.sessionHash!==sessionHash||(user.auth_mode??'legacy-scrypt')!=='legacy-scrypt')denied();
         if(revision(input.expectedRevision)!==row.payload.expectedRevision)bad('Use the authorized migration snapshot.');
-        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username),session=newSession();
-        const result=await repository.commitOpaque({kind:'migrate',ownerId:user.id,authVersion:row.authVersion,sessionHash,expectedLegacyHash:row.payload.expectedLegacyHash,registrationRecord:record,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
-        return accountResult({...result,session});
+        const record=registrationRecord(input.registrationRecord,row.ownerId,row.username);
+        return withVault(async()=>{const session=newSession();
+          const result=await repository.commitOpaque({kind:'migrate',ownerId:user.id,authVersion:row.authVersion,sessionHash,expectedLegacyHash:row.payload.expectedLegacyHash,registrationRecord:record,vaultInput:vaultInput(input),recoveryAuthHash:input.recoveryAuthHash},session);
+          return accountResult({...result,session});});
       }
       throw new CloudError(404,'This authentication endpoint does not exist.');
     });

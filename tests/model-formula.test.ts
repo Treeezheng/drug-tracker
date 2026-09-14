@@ -23,17 +23,20 @@ test('the displayed Ritalin reference has the amplitude and rates used by the ac
   assert.equal(concentration(dose,at(dose,t)).value,stated);assert.match(formula.note,/ng\/mL/);
 });
 
-test('Concerta formula describes only interpolation and the observed no-data boundary',()=>{
+test('Concerta formula explains both the observed boundary and the actual optional continuation',()=>{
   const dose=timed('concerta','18'),formula=describeDoseFormula(dose);
-  assert.equal(formula.kind,'reference');assert.match(formula.equations[0],/Cᵢ₊₁/);assert.equal(formula.equations.length,1);
+  assert.equal(formula.kind,'reference');assert.match(formula.equations[0],/Cᵢ₊₁/);assert.equal(formula.equations.length,2);
   const [t0,c0]=CONCERTA_TRACE[3],[t1,c1]=CONCERTA_TRACE[4];
   assert.ok(Math.abs(concentration(dose,at(dose,(t0+t1)/2)).value!-(c0+c1)/2)<1e-12);
   const [lastT,lastC]=CONCERTA_TRACE.at(-1)!;
-  assert.ok(formula.parameters[0].includes(`No data beyond ${lastT} h.`));
+  assert.ok(formula.parameters[0].includes(`0 ≤ t ≤ ${lastT} h.`));
+  const continuation=concentration(dose,at(dose,lastT+3.5));
+  assert.ok(Math.abs(continuation.value!-lastC/2)<1e-12);assert.equal(continuation.tail,true);
+  assert.ok(formula.equations[1].includes(String(lastT)));assert.match(formula.parameters[0],/3.5 h half-life.*starred/);
   assert.ok(Math.abs(concentration(dose,at(dose,lastT),true).value!-lastC)<1e-12);
   assert.equal(concentration(dose,at(dose,lastT)+1,true).value,null);
   const html=renderToStaticMarkup(createElement(DoseFormula,{dose}));
-  assert.match(html,/No data beyond 29\.976 h/);assert.doesNotMatch(html,/tail|when enabled|extrapolat/i);
+  assert.match(html,/29\.976 h/);assert.match(html,/unobserved estimated continuation/);assert.match(html,/Published-only views omit/);
 });
 
 test('unknown products, custom packages and unavailable saved versions do not borrow a formula',()=>{

@@ -7,7 +7,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export function herokuOptions(env = process.env) {
   if (!env.DYNO) throw new CloudError(400, 'Use this entry point only inside the Heroku dyno runtime.');
   if (!env.DATABASE_URL) throw new CloudError(400, 'Attach a PostgreSQL database before starting the Heroku edition.');
-  if (env.CLOUD_DB_PATH || env.CLOUD_ALLOW_INSECURE_LOOPBACK || env.CLOUD_ADMIN_PASSWORD || env.DRUG_POSTGRES_ALLOW_INSECURE_LOOPBACK)
+  if (env.CLOUD_DB_PATH || env.CLOUD_ALLOW_INSECURE_LOOPBACK || env.CLOUD_ADMIN_PASSWORD || env.DRUG_POSTGRES_ALLOW_INSECURE_LOOPBACK || env.CLOUD_PROXY_MODE)
     throw new CloudError(400, 'Remove local database, insecure-development and bootstrap settings from the Heroku app.');
   const port = Number(env.PORT);
   if (!/^\d+$/.test(env.PORT ?? '') || !Number.isInteger(port) || port < 1 || port > 65535) throw new CloudError(400, 'Heroku must supply a valid PORT.');

@@ -55,6 +55,11 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify distributed third-party notices
+        # Compare complete shared-package texts and the lockfile hash. The checked-in
+        # macOS inventory can differ only for explicitly incompatible OS/CPU packages.
+        run: node scripts/third-party-notices.mjs --check-portable
+
       - name: Check types
         run: pnpm check
 

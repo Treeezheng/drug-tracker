@@ -11,9 +11,15 @@ export default function AuthDialog({onClose,onUser}:{onClose:()=>void;onUser:(u:
   const [localState,setLocalState]=useState<LocalState|null>(null),[mode,setMode]=useState<Mode>('unlock');
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[code,setCode]=useState('');
   const [savedCode,setSavedCode]=useState(''),[user,setUser]=useState<User|null>(null),[copied,setCopied]=useState(false);
-  const [error,setError]=useState(''),[busy,setBusy]=useState(false);
-  const inFlight=useRef(false),stateRequest=useRef(0);
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[openingAccount,setOpeningAccount]=useState(false);
+  const inFlight=useRef(false),stateRequest=useRef(0),flow=useRef(0),opening=useRef(false);
   const requiresEmail=localState?.requiresEmail===true;
+  function close(){
+    // Once App is loading this account, it owns the transition. Do not present a
+    // cancel action that cannot cancel the parent's already-running data load.
+    if(opening.current)return;
+    flow.current++;stateRequest.current++;setPassword('');setCode('');setSavedCode('');setUser(null);onClose();
+  }
   async function loadLocalState(){
     const request=++stateRequest.current;
     setError('');setBusy(true);
@@ -25,47 +31,55 @@ export default function AuthDialog({onClose,onUser}:{onClose:()=>void;onUser:(u:
     }catch(e){if(request===stateRequest.current)setError(e instanceof TypeError?'Could not reach this Mac’s server. Start Drug Tracker, then try again.':e instanceof Error?e.message:'Could not check local access. Please try again.');}
     finally{if(request===stateRequest.current)setBusy(false);}
   }
-  useEffect(()=>{void loadLocalState();return()=>{stateRequest.current++;};},[]);
-  async function perform(action:()=>Promise<void>){
+  useEffect(()=>{void loadLocalState();return()=>{stateRequest.current++;flow.current++;};},[]);
+  async function perform(action:(current:()=>boolean)=>Promise<void>){
     if(inFlight.current)return;
+    const token=flow.current,current=()=>token===flow.current;
     inFlight.current=true;setError('');setBusy(true);
-    try{await action();}catch(e){setError(e instanceof Error?e.message:'The action could not be completed. Please try again.');}
-    finally{inFlight.current=false;setBusy(false);}
+    try{await action(current);}catch(e){if(current())setError(e instanceof Error?e.message:'The action could not be completed. Please try again.');}
+    finally{if(current()){inFlight.current=false;setBusy(false);}}
+  }
+  async function openAccount(next:User,current:()=>boolean){
+    if(!current())return;
+    opening.current=true;setOpeningAccount(true);
+    try{await onUser(next);if(current()){opening.current=false;close();}}
+    finally{opening.current=false;if(current())setOpeningAccount(false);}
   }
   async function submit(e:React.FormEvent){
     e.preventDefault();
     if(!localState)return;
-    await perform(async()=>{
+    await perform(async current=>{
       const path=mode==='setup'?'/auth/local-setup':requiresEmail?`/auth/${mode==='recover'?'recover':'login'}`:`/auth/local-${mode==='recover'?'recover':'unlock'}`;
       const body={password,...(requiresEmail?{email}:{}),...(mode==='recover'?{recoveryCode:code}:{})};
       let result:{user:User;recoveryCode?:string};
       try{result=await api(path,'POST',body);}
       catch(e){
-        if(!requiresEmail&&e instanceof ApiError&&[404,409].includes(e.status)){await loadLocalState();setPassword('');setCode('');}
+        if(!current())return;
+        if(!requiresEmail&&e instanceof ApiError&&[404,409].includes(e.status)){await loadLocalState();if(!current())return;setPassword('');setCode('');}
         throw e;
       }
+      if(!current())return;
       if(result.recoveryCode){setUser(result.user);setSavedCode(result.recoveryCode);setCopied(false);setPassword('');setCode('');}
-      else{await onUser(result.user);onClose();}
+      else await openAccount(result.user,current);
     });
   }
   async function copyKey(){
-    await perform(async()=>{
+    await perform(async current=>{
       setCopied(false);
-      try{await navigator.clipboard.writeText(savedCode);setCopied(true);}
+      try{await navigator.clipboard.writeText(savedCode);if(current())setCopied(true);}
       catch{throw new Error('Could not copy the key. Select and copy it manually, or try again.');}
     });
   }
   async function finishRecovery(){
-    await perform(async()=>{
+    await perform(async current=>{
       if(!user)throw new Error('Could not open your records. Keep this key and try unlocking again.');
-      try{await onUser(user);}
+      try{await openAccount(user,current);}
       catch{throw new Error('Could not load your records. Keep this key, check that Drug Tracker is running, then try again.');}
-      onClose();
     });
   }
   function changeMode(next:Mode){setMode(next);setError('');setPassword('');setCode('');}
   const title=savedCode?'Keep your recovery key':!localState?'Unlock Drug Tracker':mode==='setup'?'Set a password':mode==='recover'?'Reset password':requiresEmail?'Sign in':'Unlock Drug Tracker';
-  return <Modal title={title} onClose={onClose}>
+  return <Modal title={title} onClose={close} closeDisabled={openingAccount}>
     {savedCode?<div className="recovery-panel" aria-busy={busy}>
       <KeyRound size={30}/><p>Save this key somewhere private. It lets you reset your password on this Mac; there is no email reset service.</p>
       <code>{savedCode}</code>{error&&<p className="inline-error" role="alert">{error}</p>}
