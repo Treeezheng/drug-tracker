@@ -586,18 +586,19 @@ test('symptom check-ins validate tags and original dates, retain corrections, an
   for (const patch of [
     { symptoms: [] }, { symptoms: ['none', 'headache'] }, { symptoms: ['headache', 'headache'] }, { symptoms: ['not-a-tag'] }, { symptoms: [1] },
     { symptoms: ['none', 'anxiety'] }, { symptoms: ['palpitations', 'none'] }, { symptoms: ['other', 'none'] },
+    { symptoms: ['concentrated', 'none'] }, { symptoms: ['high-heart-rate', 'none'] }, { symptoms: ['refreshed', 'none'] }, { symptoms: ['refreshed', 'refreshed'] },
     { recordedAt: undefined }, { timeZone: undefined }, { date: undefined }, { date: '2026-09-14' },
     { recordedAt: '2026-02-30T08:00:00Z' }, { timeZone: 'No/SuchZone' },
   ]) assert.equal((await a.request('/api/checkins/symptom-headache', 'PUT', { ...checkin, ...patch })).status, 400, JSON.stringify(patch));
   assert.deepEqual((await a.request('/api/data')).data.checkins, []);
-  const symptomIds = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'anxiety', 'palpitations', 'other', 'none'];
+  const symptomIds = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'anxiety', 'palpitations', 'other', 'concentrated', 'high-heart-rate', 'refreshed', 'none'];
   for (const id of symptomIds) {
     const response = await a.request(`/api/checkins/symptom-${id}`, 'PUT', { ...checkin, id: `symptom-${id}`, symptoms: [id] });
     assert.equal(response.status, 200);
   }
   await service.stop(); service = await start(join(dir, 'test.sqlite'));
   const saved = (await a.request('/api/data')).data.checkins;
-  assert.equal(saved.length, 9, 'Same-day observations must remain distinct records after restart.');
+  assert.equal(saved.length, symptomIds.length, 'Same-day observations must remain distinct records after restart.');
   assert.deepEqual(saved.flatMap(row => row.symptoms).sort(), [...symptomIds].sort());
   assert.equal((await b.request('/api/checkins/symptom-headache', 'PUT', checkin)).status, 404);
   const corrected = { ...checkin, symptoms: ['nausea', 'dry-mouth'], revision: 1 };

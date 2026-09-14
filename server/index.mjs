@@ -16,7 +16,7 @@ const COOKIE = 'dose_session';
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const now = () => new Date().toISOString();
 const publicUser = (user) => ({ id: user.id, email: user.email, name: user.name });
-const SYMPTOM_IDS = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'anxiety', 'palpitations', 'other', 'none'];
+const SYMPTOM_IDS = ['headache', 'low-appetite', 'nausea', 'dry-mouth', 'sleep-trouble', 'anxiety', 'palpitations', 'other', 'concentrated', 'high-heart-rate', 'refreshed', 'none'];
 
 class ApiError extends Error {
   constructor(status, message, details) {
@@ -183,8 +183,8 @@ function validate(kind, id, data) {
     if (payload.recordedAt !== undefined) instant(payload.recordedAt, 'Check-in time');
     if (payload.symptoms !== undefined) {
       if (!Array.isArray(payload.symptoms) || !payload.symptoms.length || payload.symptoms.length > SYMPTOM_IDS.length
-        || payload.symptoms.some(id => !SYMPTOM_IDS.includes(id)) || new Set(payload.symptoms).size !== payload.symptoms.length) bad('Choose one or more valid symptom tags without duplicates.');
-      if (payload.symptoms.includes('none') && payload.symptoms.length !== 1) bad('No discomfort cannot be combined with a symptom.');
+        || payload.symptoms.some(id => !SYMPTOM_IDS.includes(id)) || new Set(payload.symptoms).size !== payload.symptoms.length) bad('Choose one or more valid feeling or discomfort tags without duplicates.');
+      if (payload.symptoms.includes('none') && payload.symptoms.length !== 1) bad('No discomfort cannot be combined with another choice.');
       instant(payload.recordedAt, 'Check-in time');
       zone(payload.timeZone);
       calendarDate(payload.date, 'check-in date');

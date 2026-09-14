@@ -111,14 +111,14 @@ test('legacy notes, malformed symptom timestamps and absence of a record are unk
 
 test('simple chips expose selection state and optional note; exact existing minute remains editable', () => {
   const html = renderToStaticMarkup(createElement(Symptoms, { checkins: [], profile, onSave: async () => {}, onRemove: async () => {} }));
-  const primary=html.match(/aria-label="Discomfort symptoms">([\s\S]*?)<\/div>/)?.[1]||'';
-  assert.equal((primary.match(/aria-pressed="false"/g) ?? []).length, 6); assert.doesNotMatch(html, /aria-pressed="true"/);
+  const primary=html.match(/aria-label="Feeling \/ discomfort choices">([\s\S]*?)<\/div>/)?.[1]||'';
+  assert.equal((primary.match(/aria-pressed="false"/g) ?? []).length, 9); assert.doesNotMatch(html, /aria-pressed="true"/);
   assert.match(html,/<details class="symptom-more"><summary>More symptoms<\/summary>/);
   for(const label of ['Dry mouth','Palpitations','Other'])assert.ok(html.includes(`>${label}</button>`));
   assert.match(html, /Note \(optional\)/); assert.match(html, /Save check-in/); assert.match(html, /novalidate=""/i);
   const existing = check('precise', '2026-09-13T15:03:21Z', ['headache']);
   const editing = renderToStaticMarkup(createElement(SymptomForm, { entry: existing, profile, onSave: async () => {} }));
-  assert.match(editing, /aria-label="Discomfort time: 08:03"/); assert.equal((editing.match(/aria-pressed="true"/g) ?? []).length, 1);
+  assert.match(editing, /aria-label="Feeling \/ discomfort time: 08:03"/); assert.equal((editing.match(/aria-pressed="true"/g) ?? []).length, 1);
 });
 
 test('empty history avoids percentages and invalid date ranges render safely', () => {
@@ -142,6 +142,26 @@ test('common new tags and existing dry-mouth observations survive editing withou
   const html=renderToStaticMarkup(createElement(SymptomForm,{entry:existing,profile,onSave:async()=>{}}));
   assert.match(html,/<details class="symptom-more" open="">/);assert.match(html,/aria-pressed="true"[^>]*>[\s\S]*?Dry mouth/);
   for(const id of ['anxiety','palpitations','other'])assert.match(symptomSelectionError([id,'none']),/cannot be combined/);
+});
+
+test('feelings and high heart rate survive editing and reporting while only positive choices get positive styling', () => {
+  const original = check('feelings', '2026-09-13T18:00:00Z', ['concentrated', 'high-heart-rate', 'refreshed']);
+  const edited = makeSymptomCheckin(symptomDraftFromCheckin(original, zone), zone, original, Date.parse('2026-09-14T00:00:00Z'));
+  assert.deepEqual(edited.symptoms, original.symptoms);
+  assert.equal(isSymptomCheckin(edited), true);
+  const form = renderToStaticMarkup(createElement(SymptomForm, { entry: edited, profile, onSave: async () => {} }));
+  const chips = [...form.matchAll(/<button[^>]*class="([^"]*symptom-chip[^"]*)"[^>]*aria-pressed="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
+  for (const label of ['Concentrated', 'Refreshed', 'No discomfort']) assert.match(chips.find(chip => chip[3].includes(label))![1], /\bpositive\b/);
+  assert.doesNotMatch(chips.find(chip => chip[3].includes('High heart rate'))![1], /\bpositive\b/);
+  for (const label of ['Concentrated', 'Refreshed', 'High heart rate']) assert.equal(chips.find(chip => chip[3].includes(label))![2], 'true');
+  const summary = summarizeSymptoms([edited], [], original.date, original.date, zone);
+  for (const id of original.symptoms!) assert.equal(summary.frequencies.find(item => item.id === id)?.reports, 1);
+  const history = renderToStaticMarkup(createElement(SymptomHistory, { checkins: [edited], doses: [], profile, from: original.date, to: original.date }));
+  assert.match(history, /Feeling \/ discomfort/);
+  assert.match(history, /Concentrated · High heart rate · Refreshed/);
+  assert.match(history, /days with this selection \/ check-in days/);
+  assert.doesNotMatch(history, /symptom days/);
+  for (const id of original.symptoms!) assert.match(symptomSelectionError([id, 'none']), /cannot be combined/);
 });
 
 test('History and saved check-ins retain date-only and timestamp-only legacy observations without inventing symptom days',()=>{
