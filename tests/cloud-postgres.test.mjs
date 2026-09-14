@@ -320,7 +320,7 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
       await waitUntilBlocked(control,'AND password_hash=$2 FOR SHARE',changingPid);
       await waitUntilBlocked(control,'WHERE id=$1 FOR SHARE');
       await sessionBlocker.query('COMMIT');
-      const changed=await changing;assert.equal(changed.security.activeSessionCount,1);assert.equal(changed.security.sessionLifetimeHours,24);
+      const changed=await changing;assert.equal(changed.security.activeSessionCount,1);assert.equal(changed.security.sessionLifetimeHours,168);
       assert.equal(await staleLogin,401);
       assert.equal(await staleVerification,401);
       assert.equal(await a.session(one.tokenHash),null);assert.equal(await a.session(two.tokenHash),null);
@@ -333,9 +333,9 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
       assert.equal((await a.readVault(secured.id,relogged.tokenHash)).revision,2);
     } finally {await blocker.query('ROLLBACK');blocker.release();await sessionBlocker.query('ROLLBACK');sessionBlocker.release();}
   });
-  await t.test('PostgreSQL HTTP security routes rotate 24h cookies and revoke all devices without changing envelopes', async () => {
+  await t.test('PostgreSQL HTTP security routes rotate seven-day cookies and revoke all devices without changing envelopes', async () => {
     const registered=await request(instances[0],'/auth/register',{method:'POST',body:{username:'security_http_owner',password:accountPassword}});
-    assert.equal(registered.status,201);assert.match(registered.headers['set-cookie'][0],/Max-Age=86400/);
+    assert.equal(registered.status,201);assert.match(registered.headers['set-cookie'][0],/Max-Age=604800(?:;|$)/);
     const signed={cookie:registered.cookie,owner:registered.data.user.id};
     const input=opaque(signed.owner);
     input.keyEnvelope={...input.keyEnvelope,version:2,kdf:{name:'Argon2id',version:19,memoryKiB:65536,iterations:3,parallelism:1,salt:Buffer.alloc(16,22).toString('base64url')}};
@@ -358,13 +358,18 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
     assert.equal((await request(instances[0],'/auth/login',{method:'POST',body:{username:'security_http_owner',password:accountPassword}})).status,401);
     assert.equal((await request(instances[1],'/auth/login',{method:'POST',body:{username:'security_http_owner',password:newPassword}})).status,200);
   });
-  await t.test('reopening PostgreSQL caps legacy session expiry at creation plus 24h without extending it on another restart', async () => {
+  await t.test('reopening PostgreSQL caps legacy session expiry at creation plus seven days without extending it on another restart', async () => {
     const old=account('legacy_long_session'),value=session();await a.register(old,value);
-    const created=new Date(Date.now()-2*86400_000).toISOString();
+    const sixDaysAgo=new Date(Date.now()-6*86400_000).toISOString(),validExpiry=Date.parse(sixDaysAgo)+7*86400_000;
+    await control.query('UPDATE drug_tracker.sessions SET created_at=$1,expires_at=$2 WHERE token_hash=$3',[sixDaysAgo,validExpiry,value.tokenHash]);
+    const validReopened=await openCloudPostgres(options);stores.push(validReopened);
+    assert.equal((await validReopened.session(value.tokenHash)).id,old.id);
+    assert.equal(Number((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rows[0].expires_at),validExpiry);
+    const created=new Date(Date.now()-8*86400_000).toISOString();
     await control.query('UPDATE drug_tracker.sessions SET created_at=$1,expires_at=$2 WHERE token_hash=$3',[created,Date.now()+28*86400_000,value.tokenHash]);
     const reopened=await openCloudPostgres(options);stores.push(reopened);
     assert.equal(await reopened.session(value.tokenHash),null);
-    const expected=Date.parse(created)+86400_000;
+    const expected=Date.parse(created)+7*86400_000;
     assert.equal(Number((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rows[0].expires_at),expected);
     const again=await openCloudPostgres(options);stores.push(again);
     assert.equal((await control.query('SELECT expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[value.tokenHash])).rowCount,0);

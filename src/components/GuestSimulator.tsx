@@ -6,7 +6,7 @@ import { addDays, formatInstant, instantToLocal, todayInZone } from '../lib/time
 import { scopeTimeline } from '../lib/timeline-scope';
 import { clearGuestWorkspace, freshGuestWorkspace, guestDayWindow, parseGuestWorkspace, readGuestWorkspace, validGuestDate, type GuestWorkspace } from '../lib/guest-workspace';
 import type { Dose, Favorite, Profile } from '../lib/types';
-import DoseEditor, { currentDoseTime, newDose, updateDose } from './DoseEditor';
+import DoseEditor, { doseTimeForDate, newDose, updateDose } from './DoseEditor';
 import TimelineChart from './TimelineChart';
 import FavoritePicker from './FavoritePicker';
 import MedicalDisclaimer from './MedicalDisclaimer';
@@ -29,16 +29,18 @@ function initial(initialWorkspace?:GuestWorkspace,initialConsent=false){
   catch{return {workspace:fallback,deviceSnapshot:null,remembered:false,consented:initialConsent,blocked:true,error:'Saved browser data is unavailable. You can continue without saving on this device.'};}
 }
 export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialWorkspace,initialConsent=false,onConsent,notice=''}:{onSignIn:()=>void;onRegister:()=>void;onWorkspace?:(workspace:GuestWorkspace)=>void;initialWorkspace?:GuestWorkspace;initialConsent?:boolean;onConsent?:(consented:boolean)=>void;notice?:string}){
-  const [loaded]=useState(()=>initial(initialWorkspace,initialConsent)),[workspace,setWorkspace]=useState<GuestWorkspace>(loaded.workspace);
+  const [loaded]=useState(()=>initial(initialWorkspace,initialConsent)),[workspace,setWorkspace]=useState<GuestWorkspace>(()=>({...loaded.workspace,date:todayInZone(loaded.workspace.profile.timeZone)}));
   const [submittedIds,setSubmittedIds]=useState<Set<string>>(()=>new Set());
   const [blocked,setBlocked]=useState(loaded.blocked),[storageError,setStorageError]=useState(loaded.error),[error,setError]=useState('');
   const [page,setPage]=useState<'simulation'|'settings'>('simulation'),[choosing,setChoosing]=useState(false);
   const [settingsEpoch,setSettingsEpoch]=useState(0),[consentBusy,setConsentBusy]=useState(false);
   const live=useRef(true);
   const deviceSnapshot=useRef<GuestWorkspace|null>(loaded.deviceSnapshot);
+  const viewDateChosen=useRef(false);
 
   const skipNextSave=useRef(false);
   const addAfterChoosing=useRef(false);
+  const medicationSelectionComplete=useRef<((selection:Favorite[])=>void)|null>(null);
   const [consented,setConsented]=useState(loaded.consented),[remember,setRemember]=useState(loaded.remembered);
   const [guestConsent,setGuestConsent]=useState(false),[adult,setAdult]=useState(false),[chooseStorage,setChooseStorage]=useState(false);
   const focusNewDose=useNewDoseFocus(page==='simulation'&&!choosing&&!guestConsent);
@@ -72,7 +74,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
 
   useEffect(()=>{if(!consented)return;const action=afterConsent.current;afterConsent.current=null;if(action==='dose')addDoseAfterConsent();else if(action==='medications')setChoosing(true);},[consented]);
   function change(patch:Partial<GuestWorkspace>){
-    try{guestDayWindow(patch.date??date,patch.days??days,(patch.profile??profile).timeZone);setWorkspace(current=>({...current,...patch}));setError('');}
+    try{guestDayWindow(patch.date??date,patch.days??days,(patch.profile??profile).timeZone);if(patch.date!==undefined)viewDateChosen.current=true;setWorkspace(current=>({...current,...patch}));setError('');}
     catch{setError('This date is unavailable in the selected time zone. Choose another date.');}
   }
   function addDose(favorite?:Favorite){
@@ -89,7 +91,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
     if(drafts.length>=100){setError('This guest workspace supports up to 100 simulated doses.');return;}
     try{
       const row=favorite?updateDose(newDose(favorite.productId,favorite.packageStrength||favorite.strength),{quantity:favorite.quantity},profile.timeZone):{...newDose(),productId:'',productName:'',formulation:'',strength:'',packageStrength:'',strengthUnit:'',unit:'',amountMg:'',ingredients:[]};
-      change({drafts:[...drafts,{...row,...currentDoseTime(profile.timeZone,profile.timeIncrementMinutes||5),timeZone:profile.timeZone,status:'simulated'}]});
+      change({drafts:[...drafts,{...row,...doseTimeForDate(date,profile.timeZone,profile.timeIncrementMinutes||5),timeZone:profile.timeZone,status:'simulated'}]});
       focusNewDose(row.id);
     }catch{setError('This medication is unavailable in the current catalog. Choose another medication.');}
   }
@@ -111,7 +113,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
     focusNewDose(null);setRemember(false);
     try{await withGuestStorageLock(()=>{if(!live.current)return;clearGuestWorkspace(window.localStorage);forgetGuestChoice(window.localStorage);deviceSnapshot.current=null;});if(!live.current)return;skipNextSave.current=true;setBlocked(false);setStorageError('');}
     catch{if(!live.current)return;setStorageError('Device storage could not be cleared. This page has been reset in memory; the saved device copy may remain.');setBlocked(true);}
-    setWorkspace(freshGuestWorkspace(profile.timeZone));setSettingsEpoch(value=>value+1);setSubmittedIds(new Set());setError('');
+    viewDateChosen.current=false;setWorkspace(freshGuestWorkspace(profile.timeZone));setSettingsEpoch(value=>value+1);setSubmittedIds(new Set());setError('');
   }
   async function acceptGuestConsent(){
     if(!adult||consentBusy)return;setConsentBusy(true);
@@ -120,7 +122,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
         const saved=await withGuestStorageLock(()=>live.current?rememberGuestChoice(window.localStorage):null);
         if(!live.current)return;
         deviceSnapshot.current=saved;
-        if(saved){setWorkspace(saved);setSettingsEpoch(value=>value+1);setSubmittedIds(new Set());}
+        if(saved){setWorkspace({...saved,date:viewDateChosen.current?date:todayInZone(saved.profile.timeZone)});setSettingsEpoch(value=>value+1);setSubmittedIds(new Set());}
         setRemember(true);setBlocked(false);setStorageError('');
       }
       if(live.current){setConsented(true);setGuestConsent(false);}
@@ -141,7 +143,7 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
           <div className="guest-dose-product"><strong><MedicationName id={dose.productId} name={dose.productName}/></strong><small>{dose.packageStrength||dose.strength} {dose.strengthUnit||'mg'} · {dose.quantity} {dose.unit}</small></div>
           <span className="tag">Simulated</span><div className="guest-dose-actions"><button className="text-button" onClick={()=>expandDose(dose.id)}>Edit</button><button className="icon-button" aria-label={`Duplicate simulated dose ${index+1}`} onClick={()=>duplicateDose(dose)}><Copy size={15}/></button><button className="icon-button" aria-label={`Remove simulated dose ${index+1}`} onClick={()=>removeDose(dose.id)}><X size={15}/></button></div>
         </div>:<div className="planned-row" id={doseRowId(dose.id)} key={dose.id}>
-          <DoseEditor onMoreMedications={()=>{addAfterChoosing.current=false;chooseMedications();}} dose={dose} index={index} profile={profile} favorites={favorites.length?favorites:undefined} productIds={favorites.map(f=>f.productId)} onChange={next=>editDose(dose,next)} onRemove={()=>removeDose(dose.id)} onDuplicate={()=>duplicateDose(dose)}/>
+          <DoseEditor onMoreMedications={complete=>{addAfterChoosing.current=false;medicationSelectionComplete.current=complete??null;chooseMedications();}} dose={dose} index={index} profile={profile} favorites={favorites.length?favorites:undefined} productIds={favorites.map(f=>f.productId)} onChange={next=>editDose(dose,next)} onRemove={()=>removeDose(dose.id)} onDuplicate={()=>duplicateDose(dose)}/>
           <div className="row-state"><span className="muted">Simulation</span><button className="button add-record small" onClick={()=>submitDose(dose)}><Plus size={15}/>Add</button></div>
         </div>)}
         {!drafts.length&&<div className="empty-state">{favorites.length?'Add a dose to explore its timeline.':'Choose My medications to start a simulation.'}</div>}
@@ -151,6 +153,6 @@ export default function GuestSimulator({onSignIn,onRegister,onWorkspace,initialW
       <div className="guest-bottom"><button className="text-button" onClick={clear}>Clear simulation</button><span>To keep an actual medication log, <button className="text-button" onClick={onRegister}>create an account</button>.</span></div>
     <footer className="app-footer"><span>Open source · Built with OpenAI Codex (GPT-6)</span><nav className="footer-links" aria-label="Project and legal"><a href="https://github.com/Treeezheng/drug-tracker" target="_blank" rel="noreferrer">GitHub</a><a href={`${import.meta.env.BASE_URL}privacy.html`} target="_blank" rel="noreferrer">Privacy</a><a href={`${import.meta.env.BASE_URL}terms.html`} target="_blank" rel="noreferrer">Terms</a></nav><MedicalDisclaimer/></footer></main>
     {guestConsent&&<Modal title="Before you start" closeDisabled={consentBusy} onClose={()=>{afterConsent.current=null;setGuestConsent(false);}}><form onSubmit={event=>{event.preventDefault();void acceptGuestConsent();}}><p>This simulator is for adults 18 and older.</p><p><strong>Results are simulations, not medical advice.</strong></p><p className="muted">By default, this simulation stays in memory and disappears when you refresh or close this page.</p><label className="check-line"><input type="checkbox" required checked={adult} onChange={event=>setAdult(event.target.checked)}/>I am 18 or older</label><label className="check-line"><input type="checkbox" checked={chooseStorage} onChange={event=>setChooseStorage(event.target.checked)}/>Remember my simulation on this device</label><p className="field-hint">Optional device storage is unencrypted. Anyone using this browser profile may see it. Leave this off on shared devices. Existing saved simulations load only if you choose this option.</p><p className="field-hint"><a href={`${import.meta.env.BASE_URL}privacy.html`} target="_blank" rel="noreferrer">Privacy details</a></p>{storageError&&<p className="inline-error" role="alert">{storageError}</p>}<div className="modal-footer"><button type="button" className="button secondary" disabled={consentBusy} onClick={()=>{afterConsent.current=null;setGuestConsent(false);}}>Cancel</button><button className="button primary" disabled={!adult||consentBusy}>{consentBusy?'Saving choice…':'Continue'}</button></div></form></Modal>}
-    {choosing&&<FavoritePicker favorites={favorites} onSave={favorite=>setWorkspace(current=>({...current,favorites:upsertFavorite(current.favorites,favorite)}))} onRemove={favorite=>setWorkspace(current=>({...current,favorites:current.favorites.filter(f=>f.id!==favorite.id)}))} onComplete={selection=>{if(addAfterChoosing.current&&selection.length){addAfterChoosing.current=false;appendDose(selection.length===1?selection[0]:undefined);setPage('simulation');}}} onClose={()=>{addAfterChoosing.current=false;setChoosing(false);}}/>}
+    {choosing&&<FavoritePicker favorites={favorites} onSave={favorite=>setWorkspace(current=>({...current,favorites:upsertFavorite(current.favorites,favorite)}))} onRemove={favorite=>setWorkspace(current=>({...current,favorites:current.favorites.filter(f=>f.id!==favorite.id)}))} onComplete={selection=>{const complete=medicationSelectionComplete.current;medicationSelectionComplete.current=null;complete?.(selection);if(addAfterChoosing.current&&selection.length){addAfterChoosing.current=false;appendDose(selection.length===1?selection[0]:undefined);setPage('simulation');}}} onClose={()=>{medicationSelectionComplete.current=null;addAfterChoosing.current=false;setChoosing(false);}}/>}
   </div>;
 }

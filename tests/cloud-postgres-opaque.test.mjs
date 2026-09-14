@@ -50,6 +50,10 @@ test('real PostgreSQL OPAQUE transactions and cross-process HTTP authentication'
   await t.test('the setup is initialized once and real PAKE opens the same private v3 vault across instances',async()=>{
     assert.deepEqual((await a.raw('/auth/opaque/config')).data,(await b.raw('/auth/opaque/config')).data);
     recovery=await a.client.registerSecure('pg-opaque-owner',master);owner=a.client.getState().user.id;
+    const createdSession=(await control.query('SELECT created_at,expires_at FROM drug_tracker.sessions WHERE token_hash=$1',[a.tokenHash])).rows[0];
+    const issuedLifetime=Number(createdSession.expires_at)-Date.parse(createdSession.created_at);
+    assert.ok(issuedLifetime>604790000&&issuedLifetime<=604800000,'OPAQUE registration creates a fixed seven-day session.');
+    const security=await a.raw('/security',undefined,owner);assert.equal(security.status,200);assert.equal(security.data.security.sessionLifetimeHours,168);
     await a.client.request('/profile','PUT',{name:'SYNTHETIC PRIVATE PG PROFILE',timeZone:'UTC',timeFormat:'24h',sleepEnabled:false,bedtime:'',wakeTime:'',weekendEnabled:false,weekendBedtime:'',weekendWakeTime:''});
     await b.client.loginSecure('pg-opaque-owner',master);
     assert.equal((await b.client.request('/export')).data.profile.name,'SYNTHETIC PRIVATE PG PROFILE');

@@ -58,7 +58,7 @@ test('generic reference is solid and included only in the starred display estima
   assert.ok(html.includes(`class="chart-no-data" id="${headingNote[1]}"`),'The header note targets the shared explanation.');
   const legend=html.split('class="chart-legend"')[1].split('class="chart-summary"')[0];
   assert.doesNotMatch(legend,/data-note-link|<sup>\*<\/sup>/);
-  assert.match(html,/<span class="reading-number"><button[^>]*><sup>\*<\/sup><\/button><strong>[\d.]+<\/strong><\/span> <small>ng\/mL<\/small>/);
+  assert.match(html,/<span class="reading-number"><strong>[\d.]+<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup><\/button><\/span>/);
   assert.equal(estimateTotals([generic],start+2*hour).Methylphenidate.value,4.3);
   const total=groupedTotals([generic],start+2*hour,false).Methylphenidate;
   assert.equal(total.complete,false);assert.equal(timelineReading(total,start+2*hour),'—');
@@ -75,7 +75,7 @@ test('a display total includes a labeled reference while direct evidence stays i
   assert.match(html,/Estimated total/);assert.match(html,/Reference estimate/);
   const display=estimateTotals([generic,brand],start+2*hour).Methylphenidate;
   assert.equal(display.value,8.6);assert.equal(display.complete,true);assert.equal(display.directComplete,false);
-  assert.match(html,/<sup>\*<\/sup><\/button><strong>/);
+  assert.match(html,/<small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
 });
 
 test('wholly unmodeled medication has dose timing but no invented concentration or reference path',()=>{
@@ -116,7 +116,7 @@ test('the header identifies an estimated tail anywhere in the plot while the sel
   const concerta={...dose('concerta','18'),administeredAt:new Date(start-8*hour).toISOString()};
   const html=render([concerta],1),reading=html.split('class="chart-summary"')[1].split('class="chart-footer"')[0];
   assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data · Estimated<\/button>/);
-  assert.ok(plottedPath(html,'total-estimated-path').points.length>1);
+  assert.ok(plottedPath(html,'history-total-path').points.length>1);
   assert.doesNotMatch(reading,/data-note-link/);
 });
 
@@ -128,4 +128,35 @@ test('an entirely unavailable reference and future-only reference do not claim a
   assert.equal(plottedPath(missing,'total-estimated-path').data,'');
   const future={...dose('methylphenidate-ir','10'),administeredAt:new Date(start+25*hour).toISOString()};
   assert.doesNotMatch(render([future],1),/chart-estimate-note/);
+});
+
+
+test('earlier records are one dashed history sum, while today keeps its total and individual contributions',()=>{
+  const oldA={...dose('ritalin','10'),id:'old-a',administeredAt:new Date(start-6*hour).toISOString()};
+  const oldB={...dose('concerta','18'),id:'old-b',administeredAt:new Date(start-8*hour).toISOString()};
+  const today={...dose('ritalin','10'),id:'today',administeredAt:new Date(start+9*hour).toISOString()};
+  const before=structuredClone([oldA,oldB,today]),html=render(before,1);
+  assert.equal((html.match(/class="history-total-path"/g)||[]).length,1);
+  assert.match(plottedPath(html,'history-total-path').tag,/stroke-dasharray="5 4"/);
+  assert.ok(plottedPath(html,'total-reference-path').points.length>1);
+  const legend=html.split('class="chart-legend"')[1].split('class="chart-summary"')[0];
+  assert.match(legend,/From history/);assert.doesNotMatch(legend,/Concerta/);
+  const onlyHistory=render([oldA,oldB],1);
+  assert.ok(plottedPath(onlyHistory,'history-total-path').points.length>1);
+  assert.equal(plottedPath(onlyHistory,'total-reference-path').data,'');
+  assert.ok(estimateTotals(before,start+12*hour).Methylphenidate.value>estimateTotals([today],start+12*hour).Methylphenidate.value);
+  assert.deepEqual(before,[oldA,oldB,today]);
+  assert.match(html,/href="\/drug\/terms.html#medical-scope"/);
+});
+
+
+test('earlier drafts and plans keep their own legend instead of posing as recorded history',()=>{
+  for(const status of ['simulated','planned'] as const){
+    const earlier={...dose('ritalin','10'),status,administeredAt:new Date(start-hour).toISOString()};
+    const html=render([earlier],1);
+    assert.doesNotMatch(html,/history-total-path|From history/);
+    const legend=html.split('class="chart-legend"')[1].split('class="chart-summary"')[0];
+    assert.match(legend,/Methylphenidate IR/);
+    assert.ok(plottedPath(html,'total-reference-path').points.length>1);
+  }
 });

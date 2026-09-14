@@ -586,9 +586,9 @@ test('cloud deletion needs fresh password and owner, rolls back on storage failu
 });
 
 const NEW_PASSWORD = 'SYNTHETIC! glacier orbit fern 8294';
-test('24-hour cloud sessions expose minimal owner-bound metadata and fresh-password changes revoke every old cookie while keeping the vault', async t => {
+test('seven-day cloud sessions expose minimal owner-bound metadata and fresh-password changes revoke every old cookie while keeping the vault', async t => {
   const f = await fixture(t), first = await login(f), second = await login(f), signed = {cookie:first.cookie,owner:f.user.id};
-  assert.match(first.headers.get('set-cookie'), /Max-Age=86400(?:;|$)/);
+  assert.match(first.headers.get('set-cookie'), /Max-Age=604800(?:;|$)/);
   const other = await f.request('/auth/register',{method:'POST',body:{username:'security_other',password:PASSWORD}});
   const foreign = {cookie:other.cookie,owner:other.data.user.id};
   const saved = await f.request('/vault',{...signed,method:'PUT',body:opaque(signed.owner)});
@@ -596,9 +596,9 @@ test('24-hour cloud sessions expose minimal owner-bound metadata and fresh-passw
   assert.equal(details.status,200);
   assert.deepEqual(Object.keys(details.data.security).sort(),['activeSessionCount','currentSession','sessionLifetimeHours']);
   assert.deepEqual(Object.keys(details.data.security.currentSession).sort(),['createdAt','expiresAt']);
-  assert.equal(details.data.security.activeSessionCount,2);assert.equal(details.data.security.sessionLifetimeHours,24);
+  assert.equal(details.data.security.activeSessionCount,2);assert.equal(details.data.security.sessionLifetimeHours,168);
   const lifetime=Date.parse(details.data.security.currentSession.expiresAt)-Date.parse(details.data.security.currentSession.createdAt);
-  assert.ok(lifetime>86390_000&&lifetime<=86400_000);
+  assert.ok(lifetime>604790_000&&lifetime<=604800_000);
   assert.equal((await f.request('/security',{...signed,owner:foreign.owner})).status,401);
   assert.equal((await f.request('/security',{owner:signed.owner})).status,401);
   const confirmed=await f.request('/auth/verify-password',{...signed,method:'POST',body:{password:PASSWORD}});
@@ -641,13 +641,20 @@ test('new account security routes share the owner attempt quota and legacy long 
   const denied=await f.request('/auth/change-password',{...signed,method:'POST',body:{currentPassword:PASSWORD,newPassword:NEW_PASSWORD}});
   assert.equal(denied.status,429);assert.ok(Number(denied.headers.get('retry-after'))>0);
   const other=await fixture(t), logged=await login(other);
-  const db=new DatabaseSync(other.dbPath), created=new Date(Date.now()-2*86400_000).toISOString();
+  const sixDaysAgo=new Date(Date.now()-6*86400_000).toISOString(), validExpiry=Date.parse(sixDaysAgo)+7*86400_000;
+  const validDb=new DatabaseSync(other.dbPath);
+  validDb.prepare('UPDATE cloud_sessions SET created_at=?,expires_at=?').run(sixDaysAgo,validExpiry);validDb.close();
+  await other.stop();await other.start();
+  assert.equal((await other.request('/session',{cookie:logged.cookie})).data.user.id,other.user.id);
+  const validCheck=new DatabaseSync(other.dbPath);
+  assert.equal(validCheck.prepare('SELECT expires_at FROM cloud_sessions').get().expires_at,validExpiry);validCheck.close();
+  const db=new DatabaseSync(other.dbPath), created=new Date(Date.now()-8*86400_000).toISOString();
   db.prepare('UPDATE cloud_sessions SET created_at=?,expires_at=?').run(created,Date.now()+28*86400_000);db.close();
   await other.stop();await other.start();
   assert.deepEqual((await other.request('/session',{cookie:logged.cookie})).data,{user:null});
   const check=new DatabaseSync(other.dbPath);
   const expires=check.prepare('SELECT expires_at FROM cloud_sessions').get().expires_at;
-  assert.equal(expires,Date.parse(created)+86400_000);check.close();
+  assert.equal(expires,Date.parse(created)+7*86400_000);check.close();
   await other.stop();await other.start();
   const again=new DatabaseSync(other.dbPath);assert.equal(again.prepare('SELECT expires_at FROM cloud_sessions').get().expires_at,expires);again.close();
   assert.equal((await login(other)).status,200);

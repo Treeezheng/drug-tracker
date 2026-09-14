@@ -49,7 +49,7 @@ async function fixture(t){
   catch(error){await app.closeStorage();await rm(dir,{recursive:true,force:true});throw error;}
   t.after(async()=>{await new Promise(resolve=>{app.server.close(resolve);app.server.closeIdleConnections();});await rm(dir,{recursive:true,force:true});});
   const requests=[];
-  function device(){
+  function device(options={}){
     let cookie='',dropPath='',dropAuth=false,failReconciliation=false,beforeCommit=false,delayPath='',delayMethod='',release,admitted;
     const fetcher=async(url,init={})=>{
       const path=String(url),method=init.method??'GET',body=init.body===undefined?undefined:String(init.body);
@@ -68,7 +68,7 @@ async function fixture(t){
       if(dropPath&&path.endsWith(dropPath)&&response.ok){dropPath='';dropAuth=failReconciliation;throw new TypeError('Synthetic lost committed acknowledgement');}
       return response;
     };
-    return {client:createCloudClient({fetch:fetcher}),fetcher,
+    return {client:createCloudClient({...options,fetch:fetcher}),fetcher,
       drop(path,{reconciliation=false,before=false}={}){dropPath=path;beforeCommit=before;failReconciliation=reconciliation;},
       delay(path,method=''){delayPath=path;delayMethod=method;return new Promise(resolve=>{admitted=resolve;});},release(){release?.();},
       async snapshot(ownerId){const response=await fetcher('/drug/api/vault',{method:'GET',headers:{'X-Dose-Owner':ownerId}});assert.equal(response.status,200);return(await response.json()).vault;}
@@ -189,4 +189,55 @@ test('OPAQUE real API: fresh purpose-bound confirmations revoke all sessions and
   await a.client.deleteAccount(MASTER);assert.equal(a.client.getState().locked,true);assert.equal(await b.client.session(),null);await assert.rejects(b.client.loginSecure('sensitive-owner',MASTER),status(403));
   const wire=JSON.stringify(f.requests);assert.equal(wire.includes(MASTER),false);
   for(const row of f.requests.filter(row=>row.path.endsWith('/account')||row.path.endsWith('/auth/logout-all')))assert.deepEqual(Object.keys(JSON.parse(row.body)),['reauthGrant']);
+});
+
+test('OPAQUE real API: device enrollment and settings confirmation keep master passwords and keys off the network',async t=>{
+  const f=await fixture(t);let marker='initial',record=null,clock=Date.now();
+  const store={epoch:()=>marker,async read(){return structuredClone(record);},async save(value,expected){if(marker!==expected)return false;record=structuredClone(value);return true;},async revoke(){marker=crypto.randomUUID();record=null;}};
+  const options={deviceUnlockStore:store,now:()=>clock},a=f.device(options);
+  const recovery=await a.client.registerSecure('device-auto-owner',MASTER);await a.client.request('/profile','PUT',profile);
+  await a.client.setAutoUnlockPreference(true);const expiresAt=record.expiresAt;
+  a.client.lock({preserveAutoUnlock:true});
+  const resumed=createCloudClient({...options,fetch:a.fetcher});
+  assert.equal(await resumed.tryAutoUnlock(),true);assert.equal(record.expiresAt,expiresAt);
+  await assert.rejects(resumed.setAutoUnlockPreference(true),/Confirm your password/);
+  clock+=60_000;
+  await assert.rejects(resumed.request('/auth/verify-password','POST',{password:'incorrect password'}),status(403));
+  assert.equal((await resumed.request('/export')).data.profile.name,profile.name);
+  await resumed.request('/auth/verify-password','POST',{password:MASTER});
+  await resumed.setAutoUnlockPreference(true);assert.equal(record.expiresAt,expiresAt+60_000);
+  assert.equal((await resumed.request('/export')).data.profile.name,profile.name);
+  const serialized=JSON.stringify(f.requests);
+  for(const secret of [MASTER,recovery.recoveryKey,recovery.recoveryKey.split('.')[3],profile.name])assert.equal(serialized.includes(secret),false);
+  assert.equal(f.requests.some(row=>row.path.endsWith('/auth/verify-password')||row.path.endsWith('/device-unlock')),false);
+  await resumed.request('/auth/change-password','POST',{currentPassword:MASTER,newPassword:NEXT});assert.equal(record,null);
+  assert.equal((await resumed.request('/export')).data.profile.name,profile.name);
+  await resumed.setAutoUnlockPreference(true);assert.ok(record);
+  await resumed.request('/vault/rotate-key','POST',{password:NEXT});assert.equal(record,null);
+});
+
+test('OPAQUE real API: initial authentication cannot enroll over a later peer revocation',async t=>{
+  for(const stage of ['register-start','register-finish','login-finish','recover-start','after-login']){
+    const f=await fixture(t);let marker='initial',record=null;
+    const store={epoch:()=>marker,async read(){return structuredClone(record);},async save(value,expected){if(marker!==expected)return false;record=structuredClone(value);return true;},async revoke(){marker=crypto.randomUUID();record=null;}};
+    const a=f.device({deviceUnlockStore:store}),peer=createCloudClient({deviceUnlockStore:store,fetch:a.fetcher});
+    let recovery;
+    if(!stage.startsWith('register')){recovery=await a.client.registerSecure('initial-device-owner',MASTER);a.client.lock();}
+    if(stage==='after-login'){
+      await a.client.loginSecure('initial-device-owner',MASTER);
+      await peer.setAutoUnlockPreference(false);
+    }else{
+      const path=stage==='recover-start'?'/auth/opaque/recover/authorize':`/auth/opaque/${stage.replace('-','/')}`;
+      const admitted=a.delay(path);
+      const authenticating=stage.startsWith('register')?a.client.registerSecure('initial-device-owner',MASTER)
+        :stage==='recover-start'?a.client.recoverSecure('initial-device-owner',recovery.recoveryKey,NEXT)
+        :a.client.loginSecure('initial-device-owner',MASTER);
+      await admitted;await peer.setAutoUnlockPreference(false);a.release();await authenticating;
+    }
+    assert.equal(a.client.getState().locked,false,`${stage}: password authentication still opens this page`);
+    await assert.rejects(a.client.setAutoUnlockPreference(true),/Confirm your password/,stage);
+    assert.equal(record,null,stage);assert.equal(await peer.tryAutoUnlock(),false,stage);
+    await a.client.request('/auth/verify-password','POST',{password:stage==='recover-start'?NEXT:MASTER});
+    await a.client.setAutoUnlockPreference(true);assert.ok(record,`${stage}: a new explicit confirmation can enroll`);
+  }
 });

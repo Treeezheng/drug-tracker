@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Pill geometry follows the app's Lucide Pill icon; ISC notice in THIRD_PARTY_NOTICES.txt. -->
+  <rect width="512" height="512" fill="#f5f5f7"/>
+  <g transform="translate(80 80) scale(14.666666667)" fill="none" stroke="#426a95" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/>
+    <path d="m8.5 8.5 7 7"/>
+  </g>
+</svg>

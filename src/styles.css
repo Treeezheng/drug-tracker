@@ -496,8 +496,10 @@ tr:last-child td { border-bottom: 0; }
 .advanced-content, .data-actions, .export-actions { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .advanced-content { padding-block: 8px; }
 .sign-in-prompt { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
-.history-toolbar > select { width: auto; min-width: 160px; }
+.history-toolbar > select, .history-period-picker > select { width: auto; min-width: 160px; }
 .history-toolbar input[type="month"] { width: 170px; height: 42px; font-size: 14px; padding: 7px 8px; border: 1px solid #cbd2da; border-radius: 5px; background: #fff; color: var(--text); }
+.history-month-picker, .history-period-picker { display: block; position: relative; min-width: 0; }
+.history-month-label, .history-period-label { display: none; }
 .custom-history { max-width: 500px; margin-bottom: 20px; }
 .summary-card { text-align: left; margin: 0; color: var(--text); }
 .summary-card:hover { border-color: #a5b7c9; }
@@ -684,7 +686,7 @@ tr:last-child td { border-bottom: 0; }
 .modal .catalog-groups + .modal-footer { position: sticky; bottom: -24px; margin-top: 20px; padding-bottom: 12px; background: #fff; }
 .modal-footer > .muted { margin-right: auto; }
 @media (min-width: 1100px) {
-  .dose-row { grid-template-columns: 56px minmax(184px, 2fr) 108px 94px 146px 138px 88px; }
+  .dose-row { grid-template-columns: 56px minmax(184px, 2fr) 108px 94px 162px 138px 88px; }
   .dose-footer { padding-left: 68px; }
 }
 @media (min-width: 701px) and (max-width: 1099px) {
@@ -843,8 +845,9 @@ tr:last-child td { border-bottom: 0; }
 .text-button.data-note-link { display: inline-flex; align-items: center; justify-content: center; vertical-align: baseline; min-width: 24px; width: 24px; min-height: 24px; height: 24px; padding: 0; margin: -2px -2px -2px -4px; line-height: 1; font-size: inherit; }
 .data-note-link > sup { font-size: .75em; line-height: 1; }
 .reading-number { display: inline-flex; position: relative; align-items: baseline; white-space: nowrap; }
-.reading-number:has(> .data-note-link) { padding-inline-start: 9px; }
-.reading-number > .data-note-link { position: absolute; inset-inline-start: -16px; top: -6px; justify-content: flex-end; margin: 0; width: 24px; min-width: 24px; height: 24px; min-height: 24px; }
+.reading-number { gap: 4px; }
+.reading-number:has(> .data-note-link) { padding-inline-end: 8px; }
+.reading-number > .data-note-link { position: absolute; inset-inline-end: -15px; top: -7px; justify-content: flex-start; margin: 0; width: 24px; min-width: 24px; height: 24px; min-height: 24px; }
 .reading-number > .data-note-link > sup { font-size: 16px; line-height: 1; }
 
 /* Reading controls and context share one aligned, compact footer. */
@@ -879,20 +882,39 @@ tr:last-child td { border-bottom: 0; }
   .inventory-actions { gap:12px; }
 }
 
-/* Native date controls must obey the same phone grid as the time picker. */
+/* Keep native Safari date boxes within their grid on phones, tablets, and desktop. */
+.dose-row .date-field, .dose-row .time-field { min-width: 0; min-inline-size: 0; }
+.dose-row .dose-time-inline { min-width: 0; }
+.dose-row, .receipt-form, .planned-confirmation { --paired-control-height: 44px; }
 @media (max-width: 700px) {
+  .dose-row, .receipt-form, .planned-confirmation { --paired-control-height: 44px; }
+  .dose-row { column-gap: 12px; }
+  .receipt-form .field-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; column-gap: 12px; align-items: start; }
   .dose-row .date-field { grid-column: 1; }
   .dose-row .time-field { grid-column: 2; }
-  .dose-row .date-field, .dose-row .time-field { min-width: 0; inline-size: 100%; }
-  .dose-row .date-field input[type="date"] {
-    display: block; box-sizing: border-box; inline-size: 100%; min-inline-size: 0; max-inline-size: 100%;
-    min-width: 0; width: 100%; max-width: 100%; height: 44px; padding-inline: 6px;
+  .dose-row .date-field, .dose-row .time-field { min-width: 0; min-inline-size: 0; inline-size: 100%; max-inline-size: 100%; }
+}
+  .dose-row .date-field input[type="date"], .dose-row .dose-time-inline > .mtp-trigger, .receipt-form .field-pair input, .planned-confirmation .field-pair input, .planned-confirmation .mtp-trigger {
+    box-sizing: border-box; min-width: 0; width: 100%; max-width: 100%;
+    min-inline-size: 0; inline-size: 100%; max-inline-size: 100%;
+    height: var(--paired-control-height); min-height: var(--paired-control-height); max-height: var(--paired-control-height);
+    block-size: var(--paired-control-height); min-block-size: var(--paired-control-height); max-block-size: var(--paired-control-height);
+    margin: 0; padding-block: 0; font-size: 16px; line-height: 1.25;
   }
-  .dose-row .date-field input::-webkit-date-and-time-value { min-width: 0; min-inline-size: 0; inline-size: 100%; text-align: start; }
-  .dose-row .date-field input::-webkit-datetime-edit { min-width: 0; padding: 0; }
-  .dose-row .date-field input::-webkit-calendar-picker-indicator { flex-shrink: 0; margin-inline: 2px 0; padding: 0; }
-  .dose-row .dose-time-inline { grid-template-columns: minmax(0, 1fr) 36px; inline-size: 100%; gap: 2px; }
-  .dose-row .dose-time-inline > .mtp-trigger { min-width: 0; max-width: 100%; padding-inline: 4px; }
+  .dose-row .date-field input[type="date"], .receipt-form .field-pair input[type="date"], .planned-confirmation input[type="date"] {
+    -webkit-appearance: none; appearance: none; display: flex; align-items: center;
+    padding-inline: 6px; overflow: hidden;
+  }
+  /* Safari gives the native value its own intrinsic box, including when empty. */
+  .dose-row .date-field input::-webkit-date-and-time-value, .receipt-form .field-pair input::-webkit-date-and-time-value, .planned-confirmation input::-webkit-date-and-time-value {
+    display: block; min-width: 0; min-inline-size: 0; inline-size: 100%; max-inline-size: 100%;
+    block-size: 1.25em; min-block-size: 1.25em; margin: 0; padding: 0; line-height: 1.25; text-align: start;
+  }
+  .dose-row .date-field input::-webkit-datetime-edit, .receipt-form .field-pair input::-webkit-datetime-edit, .planned-confirmation input::-webkit-datetime-edit { min-width: 0; min-inline-size: 0; padding: 0; }
+  .dose-row .date-field input::-webkit-calendar-picker-indicator, .receipt-form .field-pair input::-webkit-calendar-picker-indicator, .planned-confirmation input::-webkit-calendar-picker-indicator { flex-shrink: 0; margin-inline: 2px 0; padding: 0; }
+@media (max-width: 700px) {
+  .dose-row .dose-time-inline { grid-template-columns: minmax(0, 1fr) 36px; min-inline-size: 0; inline-size: 100%; max-inline-size: 100%; gap: 2px; }
+  .dose-row .dose-time-inline > .mtp-trigger { padding-inline: 4px; }
   .dose-row .dose-time-now { width: 36px; min-width: 0; min-height: 44px; padding-inline: 0; }
 
   .chart-summary { gap: 8px 12px; padding-block: 12px 20px; }
@@ -914,6 +936,27 @@ tr:last-child td { border-bottom: 0; }
   .chart-summary { gap: 8px; }
   .chart-summary .reading-time { font-size: 16px; }
   .chart-summary .reading-value strong { font-size: 18px; }
+}
+
+/* Keep both History filters in one balanced phone row; the native month picker remains available. */
+@media (max-width: 700px) {
+  .history-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 12px; }
+  .history-toolbar > .history-month-control, .history-toolbar > .history-period-picker {
+    box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-inline-size: 0;
+    height: 44px; min-height: 44px; margin: 0; border: 1px solid var(--border); border-radius: 12px; background-color: var(--soft);
+  }
+  .history-toolbar > .history-month-control { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 0; }
+  .history-month-control > .icon-button { width: 28px; min-width: 0; height: 42px; padding: 0; border-radius: 10px; }
+  .history-month-control .history-month-picker { display: flex; align-items: center; justify-content: center; width: 100%; height: 42px; }
+  .history-month-label { display: block; color: var(--text); font-size: 14px; font-weight: 500; white-space: nowrap; }
+  .history-month-control input[type="month"], .history-period-picker > select {
+    position: absolute; inset: 0; width: 100%; min-width: 0; max-width: 100%; min-inline-size: 0; max-inline-size: 100%;
+    height: 100%; min-height: 0; max-height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; font-size: 16px;
+  }
+  .history-month-picker:focus-within, .history-period-picker:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+  .history-toolbar > .history-period-picker { display: flex; align-items: center; justify-content: center; padding: 0 26px 0 10px; }
+  .history-period-label { display: block; color: var(--text); font-size: 14px; font-weight: 500; white-space: nowrap; }
+  .history-period-picker::after { content: ''; position: absolute; right: 12px; top: calc(50% - 5px); width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
 }
 
 .app-loading { max-width:1100px; margin:48px auto; padding:24px; color:var(--muted); }
@@ -943,3 +986,10 @@ tr:last-child td { border-bottom: 0; }
     max-height: calc(100dvh - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   }
 }
+
+.simulation-notice > a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; }
+.simulation-notice > a:hover { color: var(--accent); text-decoration: underline; }
+
+.planned-confirmation .field-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.planned-confirmation .field-pair > .field { min-width: 0; }
+.chart-legend .legend-history { height: 0; border-top: 2px dashed currentColor; background: transparent; color: #8c729c; }

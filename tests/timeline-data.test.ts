@@ -55,10 +55,10 @@ test('unknown sums show a dash; mixed known contributions have a star and never 
   assert.equal(timelineReading(beforeCurrent,at),'—');
 });
 
-test('rendered partial and entirely missing readings have clickable prefix stars and one shared explanation',()=>{
+test('rendered partial and entirely missing readings have clickable unit-side stars and one shared explanation',()=>{
   const old=dose('concerta',start-48*HOUR),ir={...dose('ritalin',start+10*HOUR),strength:'10',packageStrength:'10',amountMg:'10'};
   const partial=render([old,ir]);
-  assert.match(partial,/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);
+  assert.match(partial,/<strong>4\.30<\/strong> <small>ng\/mL<\/small><button[^>]*><sup>\*<\/sup>/);
   assert.match(partial,/Known contributions only/);
   assert.equal((partial.match(/class="chart-no-data"/g)||[]).length,1);
   const unknown=render([old]);

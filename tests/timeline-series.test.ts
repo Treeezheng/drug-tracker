@@ -45,3 +45,20 @@ test('geometry preserves the observed/estimated split, null gaps, and accepts ma
   assert.match(plot.totalPaths.solid,/M40.00,/);assert.ok(plot.totalPaths.estimated.startsWith(' M285.33,'));
   assert.doesNotMatch(plot.totalPaths.estimated,/776.00/,'Unknown endpoints must not be joined into a total.');
 });
+
+
+test('history aggregation sums only earlier available values and preserves unknown gaps',()=>{
+  const times=[start,start+hour,start+2*hour];
+  const row={value:0,unit:'ng/mL',known:false,complete:false,tail:false,hasReference:false};
+  const samples={max:6,series:[row,row,row],curves:[
+    {dose:{...dose('ritalin','10'),administeredAt:new Date(start-hour).toISOString()},reference:false,values:[1,null,2]},
+    {dose:{...dose('concerta','18'),administeredAt:new Date(start-2*hour).toISOString()},reference:false,values:[2,null,3]},
+    {dose:dose('ritalin','10'),reference:false,values:[0,4,1]},
+  ]};
+  const chart=timelinePanelGeometry(samples,times,800,260,start,start+2*hour);
+  assert.equal(chart.hasCurrent,true);
+  assert.equal((chart.historyPath.match(/M/g)||[]).length,2);
+  assert.doesNotMatch(chart.historyPath,/L/);
+  const allCurrent=timelinePanelGeometry({...samples,curves:samples.curves.slice(2)},times,800,260,start,start+2*hour);
+  assert.equal(allCurrent.historyPath,'');
+});

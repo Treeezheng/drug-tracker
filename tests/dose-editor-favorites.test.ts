@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import DoseEditor, { doseStrengthChoices, doseStrengthOptions, newDose, updateDose, selectDoseStrength, selectDoseMedication } from '../src/components/DoseEditor.tsx';
+import DoseEditor, { doseStrengthChoices, doseStrengthOptions, newDose, updateDose, selectDoseStrength, selectDoseMedication, selectDoseAfterFavorites } from '../src/components/DoseEditor.tsx';
 import { modelGroup } from '../src/lib/model.ts';
 import type { Dose, Favorite, Profile } from '../src/lib/types.ts';
 
@@ -17,7 +17,8 @@ test('the strength menu lists selected favorites, not the entire medication cata
   const html=strengthSelect(render(dose,favorites));
   assert.match(html,/<option value="36" selected="">36<\/option>/);
   for(const strength of ['18','27','54','500'])assert.ok(!html.includes(`<option value="${strength}"`));
-  assert.match(html,/<option value="__more__">More…<\/option>/);
+  assert.match(render(dose,favorites),/<option value="__other__">Other…<\/option>/);
+  assert.doesNotMatch(html,/value="__more__"|value="__other__"/);
 });
 
 test('multiple favorites retain custom, combination and decimal strengths without duplicates',()=>{
@@ -129,4 +130,21 @@ test('managing favorite strengths does not modify or duplicate the current dose'
   assert.deepEqual(current,before);
   const chosen=selectDoseStrength(current,doseStrengthChoices(current,saved).find(choice=>choice.packageStrength==='12.5')!,'UTC');
   assert.equal(chosen.id,current.id);assert.equal(chosen.quantity,'1.5');assert.equal(chosen.note,current.note);assert.equal(chosen.amountMg,'18.75');
+});
+
+test('Other selects the first newly saved package immediately and leaves the existing row identity and time intact',()=>{
+  const dose={...newDose('ritalin','10'),id:'kept-id',date:'2026-09-10',time:'08:35',administeredAt:'2026-09-10T08:35:00Z',note:'Keep me'};
+  const before=[favorite('ritalin','10')],added=[favorite('methylphenidate-ir','5'),favorite('methylphenidate-ir','20')];
+  const selected=selectDoseAfterFavorites(dose,before,[...before,...added],'UTC');
+  assert.equal(selected.id,dose.id);assert.equal(selected.note,dose.note);assert.equal(selected.administeredAt,dose.administeredAt);
+  assert.equal(selected.productId,'methylphenidate-ir');assert.equal(selected.packageStrength,'5');assert.equal(selected.amountMg,'5');
+  assert.equal(modelGroup(selected).reference,false);
+  assert.equal(selectDoseAfterFavorites(dose,before,[favorite('ritalin','10.00')],'UTC'),dose);
+  assert.equal(selectDoseAfterFavorites(dose,before,[],'UTC'),dose);
+  const blank={...dose,productId:'',strength:'',packageStrength:''};
+  assert.equal(selectDoseAfterFavorites(blank,[],added,'UTC').packageStrength,'5');
+  const html=render(selected,[...before,...added]);
+  const medication=html.match(/<select aria-label="Dose 1 medication"[\s\S]*?<\/select>/)?.[0]??'';
+  assert.match(medication,/<option value="__other__">Other…<\/option>/);
+  assert.doesNotMatch(strengthSelect(html),/Choose strength|Default strength/);
 });

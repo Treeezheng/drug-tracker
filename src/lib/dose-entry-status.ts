@@ -38,17 +38,17 @@ export function prepareDoseEntry(dose: Dose, now = Date.now()): Dose {
   return result;
 }
 
-/** Editing a saved plan never confirms administration; confirmation is a separate action. */
-export function prepareDoseCorrection(dose: Dose, savedStatus: DoseEntryStatus, now = Date.now()): Dose {
+/** Only an explicit correction reclassifies its selected instant; clock passage never writes. */
+export function prepareDoseCorrection(dose: Dose, now = Date.now()): Dose {
   const classification = doseEntryStatus(dose.administeredAt, now);
   if (!classification) throw new Error('Choose a complete date and time first.');
-  if (savedStatus === 'actual' && classification === 'planned') throw new Error('A taken dose cannot be in the future.');
-  return { ...structuredClone(dose), status: savedStatus };
+  return { ...structuredClone(dose), status: classification };
 }
 
 export function confirmPlannedDose(dose: Dose, now = Date.now()): Dose {
   if (dose.status !== 'planned') throw new Error('This dose is no longer planned. Refresh before continuing.');
-  return prepareDoseCorrection(dose, 'actual', now);
+  if (doseEntryStatus(dose.administeredAt, now) === 'planned') throw new Error('A taken dose cannot be in the future.');
+  return prepareDoseCorrection(dose, now);
 }
 
 /** This only exposes an explicit action. It never changes a saved status. */

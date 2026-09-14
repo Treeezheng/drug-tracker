@@ -112,7 +112,8 @@ test('every current public build file is served byte-for-byte as declared by the
     metadata.configResolved({root,build:{outDir:dist}});metadata.writeBundle();
   }});
   const manifest=JSON.parse((await f.get('/drug/build-info.json')).text);
-  for(const name of ['LICENSE','THIRD_PARTY_NOTICES.txt'])assert.ok(Object.hasOwn(manifest.files,name));
+  for(const name of ['LICENSE','THIRD_PARTY_NOTICES.txt','apple-touch-icon.png','icon-192.png','icon-512.png','site.webmanifest'])assert.ok(Object.hasOwn(manifest.files,name));
+  assert.equal((await f.get('/drug/site.webmanifest')).headers['content-type'],'application/manifest+json');
   for(const [name,expected] of Object.entries(manifest.files)){
     const response=await f.get(`/drug/${name}`);
     assert.equal(response.status,200,name);

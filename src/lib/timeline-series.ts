@@ -1,7 +1,9 @@
 import type { Dose } from './types';
 import { estimateTotals } from './timeline-estimates';
 import { hasKnownTotal } from './timeline-data';
-import { referenceForDose } from './model';
+import { doseTimestamp, referenceForDose } from './model';
+
+export const isHistoryDose=(dose:Dose,start:number)=>dose.status==='actual'&&doseTimestamp(dose)<start;
 
 /** View-owned samples: reuse the same evaluated contributions for the total and
  * individual paths. No plaintext records or samples survive in a global cache. */
@@ -47,5 +49,10 @@ export function timelinePanelGeometry(samples:ReturnType<typeof sampleTimelinePa
     if(previousKind!==kind)totalPaths[kind]+=` M${x(times[i-1]).toFixed(2)},${y(before.value).toFixed(2)}`;
     totalPaths[kind]+=` L${x(times[i]).toFixed(2)},${y(after.value).toFixed(2)}`;previousKind=kind;
   }
-  return {ceiling,totalPaths,curves:curves.map(curve=>({...curve,path:path(curve.values)}))};
+  const earlier=curves.filter(curve=>isHistoryDose(curve.dose,start));
+  const historyValues=times.map((_,i)=>{
+    const known=earlier.map(curve=>curve.values[i]).filter((value):value is number=>value!==null);
+    return known.length?known.reduce((sum,value)=>sum+value,0):null;
+  });
+  return {ceiling,totalPaths,historyPath:earlier.length?path(historyValues).trim():'',hasCurrent:curves.some(curve=>!isHistoryDose(curve.dose,start)),curves:curves.map(curve=>({...curve,path:path(curve.values)}))};
 }
