@@ -127,7 +127,7 @@ function staticBuild(distDir) {
   const editionTags = tokens.filter(tag => !tag.startsWith('<!--') && /\bname\s*=\s*["']drug-edition["']/i.test(tag));
   if (editionTags.length !== 1 || !/^<meta\s+name=["']drug-edition["']\s+content=["']cloud["']\s*\/?>$/i.test(editionTags[0])) throw new CloudError(400, 'The cloud server requires a cloud build of the frontend.');
   const legalPages = new Map();
-  for (const name of ['privacy.html', 'terms.html', 'robots.txt', 'llms.txt', 'favicon.svg', 'favicon.ico', 'build-info.json']) {
+  for (const name of ['privacy.html', 'terms.html', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'robots.txt', 'llms.txt', 'favicon.svg', 'favicon.ico', 'build-info.json']) {
     try { capture(name); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (name === 'privacy.html' || name === 'terms.html') legalPages.set(name, files.get(name));
   }
@@ -455,7 +455,7 @@ export async function createCloudServer(options = {}) {
               }
             }
           }
-          res.writeHead(200, { 'Content-Type': MIME[extname(selected)] ?? 'application/octet-stream', 'Content-Length': payload.length });
+          res.writeHead(200, { 'Content-Type': selected === 'LICENSE' ? MIME['.txt'] : MIME[extname(selected)] ?? 'application/octet-stream', 'Content-Length': payload.length });
           return res.end(req.method === 'HEAD' ? undefined : payload);
         }
       }
