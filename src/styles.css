@@ -158,10 +158,12 @@ details > p { color: var(--muted); font-size: 13px; margin: 6px 0 12px; }
 /* Timeline carries the visual emphasis; detailed readings remain inspectable. */
 .timeline-composition, .chart-main { min-width: 0; }
 .chart-main { padding: 0; }
-.chart-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin-bottom: 8px; }
+.chart-heading { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(50%); align-items: start; gap: 4px 16px; margin-bottom: 8px; }
 .chart-heading h2 { font-size: 14px; font-weight: 500; }
-.chart-heading > h3 { min-width: 0; overflow-wrap: anywhere; }
-.chart-heading-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; text-align: right; }
+.chart-heading > h2 { min-width: 0; overflow-wrap: anywhere; }
+.chart-heading-meta { display: contents; }
+.chart-heading-meta > .muted { grid-column: 1; grid-row: 2; text-align: left; }
+.chart-heading-meta > .chart-estimate-note { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; min-height: 24px; padding: 0; font-size: 12px; line-height: 1.5; text-align: right; }
 .chart-simulation-note { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .timeline-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 150px; padding: 24px 12px; text-align: center; }
 .timeline-empty h2 { font-size: 17px; font-weight: 500; }
@@ -524,8 +526,8 @@ tr:last-child td { border-bottom: 0; }
 .settings-toggles { display: grid; gap: 4px; min-width: 0; }
 .settings-section .setting-with-help { margin-block: 0; }
 .settings-toggles > .setting-with-help { min-height: 44px; }
-.settings-medication-action { display: flex; justify-content: center; min-width: 0; }
-.settings-medication-action > .button { justify-content: center; align-items: center; max-width: 100%; text-align: center; }
+.settings-medication-action { display: flex; align-items: center; justify-content: flex-start; min-width: 0; }
+.settings-medication-action > .button { justify-content: flex-start; align-items: center; max-width: 100%; text-align: left; }
 .history-records-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; }
 .history-records-heading > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .history-records-heading .export-actions { justify-content: flex-end; gap: 8px; }
@@ -801,8 +803,7 @@ tr:last-child td { border-bottom: 0; }
 .chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .reading-control .reading-time { flex: 0 0 auto; font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) {
-  .chart-heading { flex-wrap: wrap; margin-bottom: 8px; }
-  .chart-heading-meta { flex: 1 1 100%; flex-direction: row; justify-content: space-between; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; text-align: left; }
+  .chart-heading { gap: 4px 12px; margin-bottom: 8px; }
   .reading-control { gap: 6px 10px; }
   .reading-values { gap: 6px 12px; padding-inline-start: 10px; }
 }
@@ -829,18 +830,22 @@ tr:last-child td { border-bottom: 0; }
 .account-settings { scroll-margin-top: max(96px, env(safe-area-inset-top)); }
 .account-disclosures { min-width: 0; }
 .account-disclosures > details { border-top: 1px solid var(--border); margin: 0; padding: 0; }
-.account-disclosures > details > summary { display: flex; position: relative; align-items: center; justify-content: center; min-height: 44px; padding: 10px 36px; list-style: none; text-align: center; font-size: 13px; line-height: 1.5; }
+.account-disclosures > details > summary { display: flex; position: relative; align-items: center; justify-content: flex-start; min-height: 44px; padding: 10px 36px 10px 0; list-style: none; text-align: left; font-size: 13px; line-height: 1.5; }
 .account-disclosures > details > summary::-webkit-details-marker { display: none; }
 .account-disclosures > details > summary::after { content: ''; position: absolute; inset-inline-end: 14px; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
 .account-disclosures > details[open] > summary::after { transform: rotate(45deg); }
 .account-disclosures > details > p { margin: 4px 0 12px; line-height: 1.65; text-align: start; }
 .account-disclosures > details[open] { padding-bottom: 12px; }
-.account-disclosures .security-actions { justify-content: center; }
-.account-disclosures .security-actions > .button { justify-content: center; text-align: center; }
-.account-refresh { display: flex; justify-content: center; padding-top: 4px; }
-.account-refresh > .button { min-height: 44px; text-align: center; }
+.account-disclosures .security-actions { align-items: center; justify-content: flex-start; }
+.account-disclosures .security-actions > .button { justify-content: flex-start; text-align: left; }
+.account-refresh { display: flex; align-items: center; justify-content: flex-start; padding-top: 4px; }
+.account-refresh > .button { min-height: 44px; text-align: left; }
 .text-button.data-note-link { display: inline-flex; align-items: center; justify-content: center; vertical-align: baseline; min-width: 24px; width: 24px; min-height: 24px; height: 24px; padding: 0; margin: -2px -2px -2px -4px; line-height: 1; font-size: inherit; }
 .data-note-link > sup { font-size: .75em; line-height: 1; }
+.reading-number { display: inline-flex; position: relative; align-items: baseline; white-space: nowrap; }
+.reading-number:has(> .data-note-link) { padding-inline-start: 9px; }
+.reading-number > .data-note-link { position: absolute; inset-inline-start: -16px; top: -6px; justify-content: flex-end; margin: 0; width: 24px; min-width: 24px; height: 24px; min-height: 24px; }
+.reading-number > .data-note-link > sup { font-size: 16px; line-height: 1; }
 
 /* Reading controls and context share one aligned, compact footer. */
 .chart-footer { margin-inline: -24px; border-top: 1px solid var(--border); }

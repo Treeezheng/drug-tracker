@@ -66,8 +66,10 @@ test('rendered partial and entirely missing readings have clickable prefix stars
   assert.match(unknown,/class="chart-no-data"[^>]*>\* No drug data<\/summary>/);
   const separate=render([ir,dose('metformin-ir',start+HOUR)]);
   const panels=separate.split('class="analyte-panel"');
-  assert.doesNotMatch(panels[1],/data-note-link/);
-  assert.match(panels[2],/data-note-link/);
+  assert.doesNotMatch(panels[1],/chart-estimate-note|data-note-link/);
+  assert.match(panels[2],/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
+  assert.doesNotMatch(panels[2].split('class="chart-summary"')[0],/data-note-link/);
+  assert.doesNotMatch(separate,/No direct data · Estimated/);
   assert.equal((separate.match(/\* No drug data/g)||[]).length,1);
 });
 

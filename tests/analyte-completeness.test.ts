@@ -78,7 +78,11 @@ test('saved relative illustrations cannot masquerade as physical concentrations 
   assert.equal(panels.length,3);assert.match(html,/<sup>\*<\/sup><\/button><strong>4\.30<\/strong>/);
   const physicalPanel=panels.find(panel=>panel.includes('aria-label="Methylphenidate, ng/mL.'));
   assert.ok(physicalPanel,'The physical methylphenidate plot must remain separately identifiable.');
-  assert.match(physicalPanel,/ng\/mL · estimate/);assert.match(physicalPanel,/data-note-link/);assert.equal((html.match(/\* No drug data/g)||[]).length,1);
+  assert.match(physicalPanel,/ng\/mL · estimate/);
+  assert.match(physicalPanel,/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
+  assert.doesNotMatch(physicalPanel.split('class="chart-summary"')[0],/No direct data · Estimated/);
+  assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data · Estimated<\/button>/);
+  assert.equal((html.match(/\* No drug data/g)||[]).length,1);
 });
 
 test('omitted unknown history is disclosed separately from negligible known history and does not become zero',()=>{

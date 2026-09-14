@@ -32,6 +32,7 @@ test('a 72-hour Concerta chart retains a solid observed body and a separately id
   assert.deepEqual(tail.points[0],solid.points.at(-1));
   assert.ok(Math.min(...solid.points.map(point=>point[1]))<150,'The solid body includes the reference peak.');
   assert.match(html,/\* No drug data/);
+  assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data · Estimated<\/button>/);
   assert.match(html,/estimated continuation/);
   assert.doesNotMatch(html,/reference-overlay-path/);
 });
@@ -41,6 +42,8 @@ test('published-only mode still stops the Concerta trace without drawing an unob
   assert.ok(solid.points.length>2);assert.ok(solid.points.at(-1)![0]<350);
   assert.equal(plottedPath(html,'total-estimated-path').data,'');
   assert.match(html,/\* No drug data/);assert.doesNotMatch(html,/Dashed tail: no observed data/);
+  assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
+  assert.doesNotMatch(html,/No direct data · Estimated/);
 });
 
 test('generic reference is solid and included only in the starred display estimate, not direct evidence',()=>{
@@ -49,7 +52,13 @@ test('generic reference is solid and included only in the starred display estima
   assert.ok(overlay.points.length>2);assert.doesNotMatch(overlay.tag,/stroke-dasharray/);
   assert.equal(plottedPath(html,'total-reference-path').data,'');assert.ok(plottedPath(html,'total-estimated-path').points.length>2);
   assert.match(html,/\* No drug data/);assert.match(html,/Reference estimate/);
-  assert.match(html,/<sup>\*<\/sup><\/button><strong>[\d.]+<\/strong> <small>ng\/mL<\/small>/);
+  const headingNote=html.match(/class="text-button chart-estimate-note" aria-controls="([^"]+)"[^>]*>\* No direct data · Estimated<\/button>/);
+  assert.ok(headingNote,'One header note identifies the reference estimate.');
+  assert.equal((html.match(/class="text-button chart-estimate-note"/g)||[]).length,1);
+  assert.ok(html.includes(`class="chart-no-data" id="${headingNote[1]}"`),'The header note targets the shared explanation.');
+  const legend=html.split('class="chart-legend"')[1].split('class="chart-summary"')[0];
+  assert.doesNotMatch(legend,/data-note-link|<sup>\*<\/sup>/);
+  assert.match(html,/<span class="reading-number"><button[^>]*><sup>\*<\/sup><\/button><strong>[\d.]+<\/strong><\/span> <small>ng\/mL<\/small>/);
   assert.equal(estimateTotals([generic],start+2*hour).Methylphenidate.value,4.3);
   const total=groupedTotals([generic],start+2*hour,false).Methylphenidate;
   assert.equal(total.complete,false);assert.equal(timelineReading(total,start+2*hour),'—');
@@ -74,6 +83,8 @@ test('wholly unmodeled medication has dose timing but no invented concentration 
     const html=render([item],1);
     assert.match(html,/aria-label="Dose times"/);assert.match(html,/\* No drug data/);
     assert.doesNotMatch(html,/reference-overlay-path|total-reference-path|total-estimated-path|ng\/mL|class="reading-control"/);
+    assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
+    assert.doesNotMatch(html,/No direct data · Estimated/);
   }
 });
 
@@ -95,7 +106,26 @@ test('a direct-data-only chart still has sources and its formula in the same exp
   assert.match(html,/<button[^>]*class="text-button chart-sources-toggle"[^>]*>Sources &amp; methods<\/button>/);
   assert.match(html,/<summary[^>]*>Sources &amp; methods<\/summary>/);
   assert.doesNotMatch(html,/\* No drug data/);
+  assert.doesNotMatch(html,/chart-estimate-note/);
   assert.match(html,/formula/i);
   assert.ok(html.includes(sources.find(source=>source.id==='S1')!.url));
   assert.equal((html.match(/Simulation only · Not medical advice/g)||[]).length,1);
+});
+
+test('the header identifies an estimated tail anywhere in the plot while the selected reading remains direct',()=>{
+  const concerta={...dose('concerta','18'),administeredAt:new Date(start-8*hour).toISOString()};
+  const html=render([concerta],1),reading=html.split('class="chart-summary"')[1].split('class="chart-footer"')[0];
+  assert.match(html,/class="text-button chart-estimate-note"[^>]*>\* No direct data · Estimated<\/button>/);
+  assert.ok(plottedPath(html,'total-estimated-path').points.length>1);
+  assert.doesNotMatch(reading,/data-note-link/);
+});
+
+test('an entirely unavailable reference and future-only reference do not claim a plotted estimate',()=>{
+  const unavailable={...dose('concerta','27'),administeredAt:new Date(start-48*hour).toISOString()};
+  const missing=render([unavailable],1,true);
+  assert.match(missing,/class="text-button chart-estimate-note"[^>]*>\* No direct data<\/button>/);
+  assert.doesNotMatch(missing,/No direct data · Estimated/);
+  assert.equal(plottedPath(missing,'total-estimated-path').data,'');
+  const future={...dose('methylphenidate-ir','10'),administeredAt:new Date(start+25*hour).toISOString()};
+  assert.doesNotMatch(render([future],1),/chart-estimate-note/);
 });

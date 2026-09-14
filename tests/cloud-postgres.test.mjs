@@ -252,27 +252,42 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
     await assert.rejects(a.deleteAccount(doomed.id, first.tokenHash, 'wrong-hash'), error => error.status === 401);
     await assert.rejects(a.deleteAccount(doomed.id, ownerSession.tokenHash, doomed.password_hash), error => error.status === 401);
     assert.equal((await a.readVault(doomed.id, first.tokenHash)).revision, 1);
-    const blocker = await control.connect(); await blocker.query('BEGIN');
+    const blocker = await control.connect(), sessionBlocker = await control.connect();
+    await blocker.query('BEGIN'); await sessionBlocker.query('BEGIN');
+    const blockerPid = (await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+    const sessionBlockerPid = (await sessionBlocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
     try {
       await blocker.query('SELECT owner_id FROM drug_tracker.vaults WHERE owner_id=$1 FOR UPDATE', [doomed.id]);
+      // Permit the deletion's session confirmation, then hold its session DELETE
+      // so its account lock is definitely acquired before the late login starts.
+      await sessionBlocker.query('SELECT token_hash FROM drug_tracker.sessions WHERE token_hash=$1 FOR SHARE', [second.tokenHash]);
       const saving = a.writeVault(doomed.id, first.tokenHash, opaque(doomed.id, 1));
-      await waitUntilBlocked(control, 'INSERT INTO drug_tracker.vaults');
+      const savingPid = await waitUntilBlocked(control, 'INSERT INTO drug_tracker.vaults', blockerPid);
       let removed = false;
       const removing = b.deleteAccount(doomed.id, second.tokenHash, doomed.password_hash).then(() => { removed = true; });
-      await waitUntilBlocked(control, 'SELECT * FROM drug_tracker.accounts');
+      const removingPid = await waitUntilBlocked(control, 'SELECT * FROM drug_tracker.accounts', savingPid);
       assert.equal(removed, false);
-      const lateLogin = c.login(doomed, session()).then(() => 'unexpected login', error => error.status);
       await blocker.query('COMMIT');
-      assert.equal((await saving).revision, 2); await removing;
+      assert.equal((await saving).revision, 2);
+      assert.equal(await waitUntilBlocked(control, 'DELETE FROM drug_tracker.sessions WHERE owner_id=$1', sessionBlockerPid), removingPid);
+      // Queue order alone does not establish ownership of PostgreSQL row locks.
+      // Observe login waiting behind the deletion transaction's held account lock.
+      const lateSession = session();
+      const lateLogin = c.login(doomed, lateSession).then(() => 'unexpected login', error => error.status);
+      await waitUntilBlocked(control, 'AND password_hash=$2 FOR SHARE', removingPid);
+      assert.equal(removed, false);
+      await sessionBlocker.query('COMMIT'); await removing;
       assert.equal(await lateLogin, 401);
       assert.equal(await a.session(first.tokenHash), null); assert.equal(await b.session(second.tokenHash), null);
+      assert.equal(await c.session(lateSession.tokenHash), null);
       assert.equal(await c.accountByUsername(doomed.username), null);
+      await assert.rejects(c.login(doomed, session()), error => error.status === 401);
       await assert.rejects(a.writeVault(doomed.id, first.tokenHash, opaque(doomed.id,2)), error => error.status === 401);
       for (const [table,column] of [['accounts','id'],['sessions','owner_id'],['vaults','owner_id']]) {
         assert.equal((await control.query(`SELECT count(*)::int AS n FROM drug_tracker.${table} WHERE ${column}=$1`, [doomed.id])).rows[0].n, 0);
       }
       assert.equal((await a.accountByUsername(owner.username)).id, owner.id);
-    } finally { await blocker.query('ROLLBACK'); blocker.release(); }
+    } finally { await blocker.query('ROLLBACK'); blocker.release(); await sessionBlocker.query('ROLLBACK'); sessionBlocker.release(); }
   });
   await t.test('password replacement rolls back on session collision, then waits for prior writes and rejects stale login while preserving ciphertext', async () => {
     const secured=account('security_race_owner'),one=session(),two=session();
