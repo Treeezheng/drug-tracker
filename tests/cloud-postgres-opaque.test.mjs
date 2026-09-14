@@ -9,6 +9,7 @@ import { openCloudPostgres } from '../server/cloud-postgres.mjs';
 import { createCloudClient } from '../src/lib/cloud-client.ts';
 import { opaqueIdentifiers,OPAQUE_KSF } from '../src/lib/opaque-client.ts';
 import { decryptVault,readSecureRecoveryKey } from '../src/lib/vault-crypto.ts';
+import { dropDisconnectedTestDatabase } from './helpers/postgres-cleanup.mjs';
 
 const origin='https://opaque-synthetic.example',master='SYNTHETIC gentle compass orbit 9483!',next='SYNTHETIC granite river hazel 7482!';
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -25,7 +26,12 @@ test('real PostgreSQL OPAQUE transactions and cross-process HTTP authentication'
   const control=new Pool({connectionString:url.toString(),ssl:false,max:3});
   const repos=await Promise.all([openCloudPostgres(options),openCloudPostgres(options)]);
   const apps=[];const requests=[];
-  t.after(async()=>{for(const app of apps){await new Promise(resolve=>{app.server.close(resolve);app.server.closeAllConnections();});await app.closeStorage();}await Promise.all(repos.map(repo=>repo.close()));await control.end();await admin.query(`DROP DATABASE ${database} WITH(FORCE)`);await admin.end();});
+  t.after(async()=>{
+    for(const app of apps){await new Promise(resolve=>{app.server.close(resolve);app.server.closeAllConnections();});await app.closeStorage();}
+    await Promise.all(repos.map(repo=>repo.close()));await control.end();
+    try { await dropDisconnectedTestDatabase(admin,database); }
+    finally { await admin.end(); }
+  });
   for(let i=0;i<2;i++){const app=await createCloudServer({...options,origin,proxyMode:'heroku',loginAttemptLimit:500,registrationAttemptLimit:100});await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));apps.push(app);}
   function device(index=0,source='192.0.2.48'){
     let cookie;

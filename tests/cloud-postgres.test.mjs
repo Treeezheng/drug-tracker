@@ -6,6 +6,7 @@ import { Pool } from 'pg';
 import { openCloudPostgres } from '../server/cloud-postgres.mjs';
 import { createCloudServer } from '../server/cloud.mjs';
 import { createVaultKey, encryptVault, decryptVault, wrapVaultKey, unwrapVaultKey } from '../src/lib/vault-crypto.ts';
+import { dropDisconnectedTestDatabase } from './helpers/postgres-cleanup.mjs';
 
 const testUrl = process.env.DRUG_TEST_POSTGRES_URL;
 const origin = 'https://drug-tracker-7e9d0c2e62c1.herokuapp.com';
@@ -43,6 +44,44 @@ async function waitUntilBlocked(pool, queryFragment, blockingPid = null) {
   throw new Error('Expected PostgreSQL lock wait was not observed.');
 }
 
+test('PostgreSQL fixture cleanup waits for client disconnection after pool.end resolves', { skip: !testUrl, timeout: 10_000 }, async () => {
+  const url = new URL(testUrl);
+  assert.ok(['127.0.0.1', '[::1]'].includes(url.hostname)); assert.equal(url.search, '');
+  const admin = new Pool({ connectionString: url.toString(), ssl: false });
+  const database = `drug_test_${randomBytes(8).toString('hex')}`;
+  await admin.query(`CREATE DATABASE ${database}`); url.pathname = `/${database}`;
+  const pool = new Pool({ connectionString: url.toString(), ssl: false, max: 1 });
+  let finishConnection, disconnected;
+  try {
+    const client = await pool.connect();
+    disconnected = new Promise(resolve => client.once('end', resolve));
+    const originalEnd = client.end.bind(client);
+    // Deterministically hold the real TCP shutdown that pg-pool does not await.
+    // This recreates the CI teardown ordering without killing or ignoring errors.
+    client.end = (...args) => { finishConnection = () => originalEnd(...args); };
+    client.release(); await pool.end();
+    assert.equal(typeof finishConnection, 'function');
+    assert.equal((await admin.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1', [database])).rows[0].count, 1);
+    let dropped = false;
+    const dropping = dropDisconnectedTestDatabase(admin, database).then(() => { dropped = true; });
+    try {
+      assert.equal((await admin.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1', [database])).rows[0].count, 1);
+      assert.equal(dropped, false, 'A completed pool shutdown must not be mistaken for a disconnected client.');
+    } finally {
+      finishConnection(); finishConnection = undefined;
+      await dropping; await disconnected;
+    }
+    assert.equal((await admin.query('SELECT 1 FROM pg_database WHERE datname=$1', [database])).rowCount, 0);
+  } finally {
+    finishConnection?.();
+    if (!pool.ending) await pool.end();
+    if (disconnected) await disconnected;
+    try {
+      if ((await admin.query('SELECT 1 FROM pg_database WHERE datname=$1', [database])).rowCount) await dropDisconnectedTestDatabase(admin, database);
+    } finally { await admin.end(); }
+  }
+});
+
 test('real PostgreSQL cloud integration (explicit temporary local database only)', { skip: !testUrl, timeout: 60_000 }, async t => {
   const url = new URL(testUrl);
   assert.ok(['127.0.0.1', '[::1]'].includes(url.hostname), 'Integration tests never connect to a remote database.');
@@ -59,7 +98,8 @@ test('real PostgreSQL cloud integration (explicit temporary local database only)
       await new Promise(resolve => { instance.server.close(resolve); instance.server.closeAllConnections(); }); await instance.closeStorage();
     }));
     await Promise.all(stores.map(store => store.close())); await control.end();
-    await admin.query(`DROP DATABASE ${database} WITH (FORCE)`); await admin.end();
+    try { await dropDisconnectedTestDatabase(admin, database); }
+    finally { await admin.end(); }
   });
   const [a, b, c] = await Promise.all(Array.from({ length: 3 }, () => openCloudPostgres(options)));
   stores.push(a, b, c);
