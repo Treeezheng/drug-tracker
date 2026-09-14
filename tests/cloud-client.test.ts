@@ -51,6 +51,24 @@ function server() {
 async function ready(data = empty()) { const remote = server(), client = createCloudClient({ fetch: remote.fetcher }); await client.session(); await client.loadVault(); const setup = await client.setupVault(passphrase, data); return { remote, client, ...setup }; }
 const puts = (remote: ReturnType<typeof server>) => remote.requests.filter(r => r.path === '/vault' && r.method === 'PUT');
 
+test('encrypted preferences accept 1/5/10 and survive unlock/export; invalid increments never upload or replace them', async () => {
+  const {client,remote,recoveryKey}=await ready(complete());
+  let current=(await client.request<AppData>('/data')).profile!;
+  for(const timeIncrementMinutes of [1,5,10] as const){
+    current=await client.request<Profile>('/profile','PUT',{...current,timeIncrementMinutes},'owner1');
+    const reopened=createCloudClient({fetch:remote.fetcher});await reopened.session();
+    assert.equal((await reopened.unlockVault({recoveryKey})).profile?.timeIncrementMinutes,timeIncrementMinutes);
+    const exported=await reopened.request<{data:AppData}>('/export');
+    assert.equal(exported.data.profile?.timeIncrementMinutes,timeIncrementMinutes);
+    assert.deepEqual(exported.data.doses,complete().doses);
+    reopened.lock();
+  }
+  const before=puts(remote).length,snapshot=structuredClone(remote.vault);
+  for(const timeIncrementMinutes of [-1,0,2,15,1.5,'1',null])await assert.rejects(client.request('/profile','PUT',{...current,timeIncrementMinutes},'owner1'),/time increment/);
+  assert.equal(puts(remote).length,before);assert.deepEqual(remote.vault,snapshot);
+  assert.deepEqual((await client.request<AppData>('/data')).profile,current);
+});
+
 test('every current collection and historical snapshot round-trips encrypted; only auth routes receive auth password', async () => {
   const remote = server(), client = createCloudClient({ fetch: remote.fetcher });
   await client.login('Owner', 'auth-password-never-vault');

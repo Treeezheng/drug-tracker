@@ -23,15 +23,17 @@ test('the displayed Ritalin reference has the amplitude and rates used by the ac
   assert.equal(concentration(dose,at(dose,t)).value,stated);assert.match(formula.note,/ng\/mL/);
 });
 
-test('Concerta formula describes interpolation and explicitly conditional extrapolation',()=>{
+test('Concerta formula describes only interpolation and the observed no-data boundary',()=>{
   const dose=timed('concerta','18'),formula=describeDoseFormula(dose);
-  assert.equal(formula.kind,'reference');assert.match(formula.equations[0],/Cᵢ₊₁/);assert.match(formula.equations[1],/when enabled/);
+  assert.equal(formula.kind,'reference');assert.match(formula.equations[0],/Cᵢ₊₁/);assert.equal(formula.equations.length,1);
   const [t0,c0]=CONCERTA_TRACE[3],[t1,c1]=CONCERTA_TRACE[4];
   assert.ok(Math.abs(concentration(dose,at(dose,(t0+t1)/2)).value!-(c0+c1)/2)<1e-12);
   const [lastT,lastC]=CONCERTA_TRACE.at(-1)!;
-  assert.ok(formula.equations[1].includes(String(lastT)));assert.ok(formula.equations[1].includes(String(lastC)));
-  assert.ok(Math.abs(concentration(dose,at(dose,lastT+3.5)).value!-lastC/2)<1e-12);
-  assert.equal(concentration(dose,at(dose,lastT+3.5),true).value,null);
+  assert.ok(formula.parameters[0].includes(`No data beyond ${lastT} h.`));
+  assert.ok(Math.abs(concentration(dose,at(dose,lastT),true).value!-lastC)<1e-12);
+  assert.equal(concentration(dose,at(dose,lastT)+1,true).value,null);
+  const html=renderToStaticMarkup(createElement(DoseFormula,{dose}));
+  assert.match(html,/No data beyond 29\.976 h/);assert.doesNotMatch(html,/tail|when enabled|extrapolat/i);
 });
 
 test('unknown products, unverified generics, custom packages and unavailable saved versions do not borrow a formula',()=>{
@@ -60,14 +62,16 @@ test('saved accepted illustrations remain read-only and retain their relative sc
   assert.equal(describeDoseFormula({...dose,amountMg:''}).kind,'unavailable');
 });
 
-test('Formula and Record details are independent collapsed disclosures; record controls retain saved patch data',()=>{
-  const dose={...timed('xelstrym','4.5'),removalAt:'2026-09-13T23:03:42Z',note:'Saved patch note',manufacturer:'Saved maker'};
+test('removed details stay in the record while only Formula and the patch-specific removal control remain',()=>{
+  const dose={...timed('xelstrym','4.5'),removalAt:'2026-09-13T23:03:42Z',note:'Saved patch note',manufacturer:'Saved maker',unusual:true};
   const before=JSON.stringify(dose);
   const html=renderToStaticMarkup(createElement(DoseEditor,{dose,index:0,profile,onChange:()=>{throw Error('Rendering must not change a record');}}));
   const formula=html.match(/<details class="dose-formula-details">([\s\S]*?)<\/details>/)?.[1];
   assert.ok(formula);assert.match(formula,/aria-label="Dose 1 formula"/);assert.match(formula,/No verified formula/);assert.doesNotMatch(formula,/<(?:input|textarea|select)\b/);
-  assert.match(html,/<details class="dose-record-details"><summary>Record details/);
-  assert.match(html,/Saved patch note/);assert.match(html,/Saved maker/);assert.match(html,/value="2026-09-13T16:03"/);
+  assert.doesNotMatch(html,/Record details|dose-record-details|Saved patch note|Saved maker|Manufacturer \/ labeler|Altered administration/);
+  assert.match(html,/class="patch-removal-editor"/);assert.match(html,/value="2026-09-13T16:03"/);
+  const corrected=updateDose(dose,{date:'2026-09-13',time:'08:05'},zone);
+  for(const field of ['note','manufacturer','unusual','formulation','ingredients','removalAt'] as const)assert.deepEqual(corrected[field],dose[field]);
   assert.doesNotMatch(html,/Details &amp; assumptions|Use these explicit assumptions|Illustration peak|Effect duration, minimum/);
   assert.doesNotMatch(html,/<details[^>]*\sopen(?:=|>)/);assert.equal(JSON.stringify(dose),before);
 });

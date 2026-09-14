@@ -11,7 +11,7 @@ import { stockBalances } from '../src/lib/inventory.ts';
 const zone='America/Los_Angeles';
 const profile:Profile={name:'',timeZone:zone,timeFormat:'24h',sleepEnabled:false,bedtime:'',wakeTime:'',weekendEnabled:false,weekendBedtime:'',weekendWakeTime:'',timeIncrementMinutes:5};
 function blank():Dose{return {...newDose(),productId:'',productName:'',formulation:'',strength:'',packageStrength:'',amountMg:'',ingredients:[],administeredAt:'',date:'',time:''};}
-function render(dose:Dose,productIds?:string[],increment:5|10=5){return renderToStaticMarkup(createElement(DoseEditor,{dose,index:0,profile:{...profile,timeIncrementMinutes:increment},productIds,onChange:()=>{}}));}
+function render(dose:Dose,productIds?:string[],increment:NonNullable<Profile['timeIncrementMinutes']>=5){return renderToStaticMarkup(createElement(DoseEditor,{dose,index:0,profile:{...profile,timeIncrementMinutes:increment},productIds,onChange:()=>{}}));}
 function freeze(dose:Dose):Dose{for(const item of dose.ingredients||[])Object.freeze(item);if(dose.ingredients)Object.freeze(dose.ingredients);if(dose.assumptions)Object.freeze(dose.assumptions);return Object.freeze(dose);}
 
 test('a blank row can receive a precise time before medication without inventing a product or amount',()=>{
@@ -28,7 +28,7 @@ test('favorites narrow the selector but preserve the current known or historical
   assert.match(known,/<option value="ritalin" selected="">Methylphenidate IR<\/option>/);assert.match(known,/<option value="adderall-ir">Mixed amphetamine salts IR<\/option>/);assert.doesNotMatch(known,/Concerta/);
   const historical={...newDose('ritalin','5'),productId:'old-product',productName:'Recorded medicine',formulation:'Recorded form',packageStrength:'5',manufacturer:'Recorded manufacturer'};
   const html=render(historical,[]);
-  assert.match(html,/Recorded medicine/);assert.match(html,/Recorded form/);assert.match(html,/Recorded manufacturer/);assert.match(html,/Historical · D/);
+  assert.match(html,/Recorded medicine/);assert.match(html,/Recorded form/);assert.doesNotMatch(html,/Recorded manufacturer/);assert.doesNotMatch(html,/Historical · D/);
   assert.match(html,/<select aria-label="Dose 1 strength" disabled=""/);
 });
 
@@ -49,7 +49,7 @@ test('a half 10 mg tablet remains half a tablet with exact labeled 5 mg',()=>{
   const dose=updateDose(newDose('ritalin','10'),{quantity:'.5'},zone);
   assert.equal(dose.quantity,'0.5');assert.equal(dose.strength,'10');assert.equal(dose.amountMg,'5');assert.equal(dose.unusual,true);
   assert.equal(doseInputError(dose),'');assert.match(render(dose),/0.5 tablet × 10 mg = 5 mg/);
-  assert.match(render(dose),/does not mean this product can be divided/);
+  assert.doesNotMatch(render(dose),/Record details|Altered administration/);
 });
 
 test('half-tablet buttons use reviewed brand and strength rules rather than assuming all tablets split',()=>{
@@ -117,7 +117,7 @@ test('four salt amounts remain exact while the primary line shows the labeled sa
   const dose=updateDose(newDose('adderall-ir','5'),{quantity:'.5'},zone);
   assert.deepEqual(dose.ingredients?.map(i=>i.amountMg),['0.625','0.625','0.625','0.625']);
   const html=render(dose),primary=html.match(/<span class="dose-amount">([^<]*)/)?.[1];
-  assert.equal(primary,'0.5 tablet × 5 mg = 2.5 mg');assert.match(html,/0.625 mg dextroamphetamine saccharate/);
+  assert.equal(primary,'0.5 tablet × 5 mg = 2.5 mg');assert.doesNotMatch(html,/0.625 mg dextroamphetamine saccharate/);
 });
 
 test('clearing and re-entering quantity recovers a legacy ingredient snapshot without using the catalog',()=>{
@@ -147,11 +147,18 @@ test('clearing a medication or timestamp removes the previous value without sile
   assert.equal(shiftDoseTime(noTime,5,zone),noTime);
 });
 
-test('five- and ten-minute controls preserve arbitrary manual times and blank inputs',()=>{
+test('all sizes use one time picker with an inline Now and retain the original off-step time',()=>{
   const d=updateDose(newDose('ritalin','5'),{date:'2026-09-13',time:'08:03'},zone);
   assert.equal(shiftDoseTime(d,5,zone).time,'08:08');assert.equal(shiftDoseTime(d,-10,zone).time,'07:53');
-  assert.match(render(d,undefined,5),/step="300"/);assert.match(render(d,undefined,10),/step="600"/);
-  assert.match(render(d,undefined,10),/Move Dose 1 10 minutes earlier/);assert.match(render(d,undefined,10),/value="08:03"/);
+  for(const increment of [1,5,10] as const){
+    const html=render(d,undefined,increment);
+    assert.match(html,/class="dose-time-inline"/);assert.match(html,/aria-label="Dose 1 time: 08:03"/);
+    assert.equal((html.match(/aria-haspopup="dialog"/g)||[]).length,1);
+    assert.equal((html.match(/>Now<\/button>/g)||[]).length,1);
+    assert.doesNotMatch(html,/type="time"|time-adjustments|dose-time-mobile|dose-time-desktop|minutes earlier|minutes later/);
+    assert.match(html,/aria-selected="true">03<\/div>/);
+    if(increment===1)assert.equal((html.match(/role="option"/g)||[]).length,84);
+  }
   const empty=blank();assert.equal(shiftDoseTime(empty,5,zone),empty);assert.equal(shiftDoseTime(d,Infinity,zone),d);
 });
 
@@ -192,7 +199,7 @@ test('time errors and dose units are available through accessible descriptions',
   const ambiguous=updateDose(newDose('ritalin','5'),{date:'2026-11-01',time:'01:30'},zone);
   const html=render(ambiguous),errorId=`dose-time-error-${ambiguous.id}`;
   assert.match(html,new RegExp(`id="${errorId}" role="alert"`));
-  assert.match(html,new RegExp(`aria-label="Dose 1 time" aria-invalid="true" aria-describedby="${errorId}"`));
+  assert.match(html,new RegExp(`aria-label="Dose 1 time: 01:30" aria-invalid="true" aria-describedby="${errorId}"`));
   const liquid=newDose('metformin-solution','100'),liquidHtml=render(liquid);
   assert.match(liquidHtml,new RegExp(`id="dose-quantity-unit-${liquid.id}">Quantity · mL`));
   assert.match(liquidHtml,new RegExp(`aria-describedby="dose-quantity-unit-${liquid.id}"`));
@@ -216,16 +223,19 @@ test('patch recording keeps nominal delivery units and rejects invalid removal c
   assert.equal(doseInputError({...patch,removalAt:'2026-09-14T00:00:00Z'}),'');
 });
 
-test('Now rounds down to local five or ten minute boundaries and never selects a future instant',()=>{
+test('Now rounds down to local one, five or ten minute boundaries and never selects a future instant',()=>{
   const at=Date.parse('2026-09-13T15:09:59.999Z');
-  const five=currentDoseTime(zone,5,at),ten=currentDoseTime(zone,10,at);
+  const one=currentDoseTime(zone,1,at),five=currentDoseTime(zone,5,at),ten=currentDoseTime(zone,10,at);
+  assert.deepEqual({date:one.date,time:one.time},{date:'2026-09-13',time:'08:09'});
+  assert.equal(one.administeredAt,'2026-09-13T15:09:00Z');
   assert.deepEqual({date:five.date,time:five.time},{date:'2026-09-13',time:'08:05'});
   assert.deepEqual({date:ten.date,time:ten.time},{date:'2026-09-13',time:'08:00'});
   assert.equal(five.administeredAt,'2026-09-13T15:05:00Z');assert.equal(ten.administeredAt,'2026-09-13T15:00:00Z');
-  assert.ok(Date.parse(five.administeredAt)<=at&&Date.parse(ten.administeredAt)<=at);
+  for(const value of [one,five,ten])assert.ok(Date.parse(value.administeredAt)<=at);
   const exact=currentDoseTime('UTC',10,Date.parse('2026-01-01T00:00:00Z'));assert.equal(exact.administeredAt,'2026-01-01T00:00:00Z');
   assert.match(render(blank()),/Use current time for Dose 1/);
   assert.throws(()=>currentDoseTime(zone,5,NaN),/valid time/);
+  for(const increment of [-1,0,2,15,1.5,'1',null])assert.throws(()=>currentDoseTime(zone,increment as never,at),/minute increment/);
 });
 
 test('Now uses the displayed zone and its local minute grid, including a 45-minute offset',()=>{

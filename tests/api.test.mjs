@@ -19,6 +19,33 @@ const DOSE = {
 const PROFILE = { name: 'Test A', timeZone: 'America/Los_Angeles', timeFormat: '24h', sleepEnabled: true, bedtime: '23:00', wakeTime: '07:00', weekendEnabled: false };
 const RECEIPT = { id: 'synthetic-receipt', productId: 'ritalin-ir', productName: 'Ritalin', packageStrength: '10', strengthUnit: 'mg', unit: 'tablet', quantity: '50', receivedAt: '2026-09-12T08:00:00Z', timeZone: 'America/Los_Angeles', note: 'Synthetic opening balance only' };
 
+test('planned dose events persist independently of the clock and confirm under the same ID exactly once', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'drug-planned-api-')), dbPath = join(dir, 'synthetic.sqlite');
+  let service = await start(dbPath);
+  t.after(async () => { await service.stop(); await rm(dir, { recursive: true, force: true }); });
+  const account = client(() => service.url);
+  const registration = await account.request('/api/auth/register', 'POST', { email: 'planned-synthetic@example.test', password: PASSWORD });
+  const headers = { 'X-Dose-Owner': registration.data.user.id };
+  const future = { ...DOSE, id: 'future-planned', status: 'planned', administeredAt: '2099-09-13T12:00:00Z' };
+  const overdue = { ...DOSE, id: 'past-planned', status: 'planned', administeredAt: '2020-09-13T12:00:00Z' };
+  const first = await account.request(`/api/doses/${future.id}`, 'PUT', future, headers);
+  const past = await account.request(`/api/doses/${overdue.id}`, 'PUT', overdue, headers);
+  assert.equal(first.status, 200); assert.equal(past.status, 200);
+  assert.equal((await account.request(`/api/doses/${future.id}`, 'PUT', future, headers)).data.revision, 1);
+  await service.stop(); service = await start(dbPath);
+  const restored = (await account.request('/api/data', 'GET', undefined, headers)).data.doses;
+  assert.deepEqual(restored.map(d => [d.id, d.status, d.revision]).sort(), [['future-planned', 'planned', 1], ['past-planned', 'planned', 1]]);
+  const confirmation = { ...past.data, status: 'actual' };
+  const confirmed = await account.request(`/api/doses/${overdue.id}`, 'PUT', confirmation, headers);
+  assert.equal(confirmed.status, 200); assert.equal(confirmed.data.revision, 2);
+  const retried = await account.request(`/api/doses/${overdue.id}`, 'PUT', confirmation, headers);
+  assert.equal(retried.data.revision, 2);
+  const backup = (await account.request('/api/export', 'GET', undefined, headers)).data;
+  assert.equal(backup.data.doses.length, 2);
+  assert.equal(backup.data.doses.filter(d => d.status === 'actual').length, 1);
+  assert.deepEqual(backup.revisions.filter(d => d.id === overdue.id).map(d => d.data.status), ['planned', 'actual']);
+});
+
 async function availablePort() {
   const socket = createServer();
   await new Promise((resolve, reject) => {
@@ -436,7 +463,7 @@ test('profile increments and saved scenario views validate atomically with legac
   const keep = await a.request('/api/doses/keep-during-view-validation', 'PUT', { ...DOSE, id: 'keep-during-view-validation' });
   assert.equal(keep.status, 200);
   const before = (await a.request('/api/export')).data;
-  for (const timeIncrementMinutes of [0, 15, 5.5, '5', null]) {
+  for (const timeIncrementMinutes of [-1, 0, 2, 15, 5.5, '1', '5', null]) {
     const invalidProfile = { ...PROFILE, timeIncrementMinutes };
     assert.equal((await a.request('/api/profile', 'PUT', invalidProfile)).status, 400);
     assert.equal((await a.request('/api/import', 'POST', { backup: archive(invalidProfile), mode: 'replace' })).status, 400);
@@ -454,11 +481,18 @@ test('profile increments and saved scenario views validate atomically with legac
   const after = (await a.request('/api/export')).data;
   assert.deepEqual(after.data, before.data);
   assert.deepEqual(after.revisions, before.revisions);
-  for (const timeIncrementMinutes of [5, 10]) for (const days of [1, 2, 3]) {
+  for (const timeIncrementMinutes of [1, 5, 10]) for (const days of [1, 2, 3]) {
     const result = await a.request('/api/import', 'POST', { backup: archive({ ...PROFILE, timeIncrementMinutes }, { ...scenario, view: { ...view, days } }), mode: 'replace' });
     assert.equal(result.status, 200, JSON.stringify(result.data));
     assert.equal(result.data.data.profile.timeIncrementMinutes, timeIncrementMinutes);
     assert.deepEqual(result.data.data.scenarios[0].view, { ...view, days });
+  }
+  for (const timeIncrementMinutes of [1, 5, 10]) {
+    const current = (await a.request('/api/data')).data.profile;
+    const saved = await a.request('/api/profile', 'PUT', { ...current, timeIncrementMinutes });
+    assert.equal(saved.status, 200);
+    assert.equal((await a.request('/api/data')).data.profile.timeIncrementMinutes, timeIncrementMinutes);
+    assert.equal((await a.request('/api/export')).data.data.profile.timeIncrementMinutes, timeIncrementMinutes);
   }
   // Exported audit payloads are validated too, not only the live data preview.
   const full = (await a.request('/api/export')).data;

@@ -1,10 +1,10 @@
-import { groupMedicationProducts } from '../lib/medication-display';
+import { groupMedicationProducts, medicationDisplay } from '../lib/medication-display';
 import { Copy, Trash2, ChevronDown } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { products, getProduct } from '../lib/catalog';
-import { modelGroup, MODEL_VERSION } from '../lib/model';
+import { MODEL_VERSION } from '../lib/model';
 import { instantToLocal, localToInstant } from '../lib/time';
-import type { Dose, Profile, Product } from '../lib/types';
+import type { Dose, Favorite, Profile, Product, TimeIncrementMinutes } from '../lib/types';
 import { colors } from './TimelineChart';
 import MobileTimePicker from './MobileTimePicker';
 import DoseFormula from './DoseFormula';
@@ -167,8 +167,8 @@ function occurrenceAt(iso:string,zone:string):Dose['disambiguation'] {
   if(earlier===later)return undefined;
   return Math.floor(Date.parse(iso)/60000)===Math.floor(Date.parse(later)/60000)?'later':'earlier';
 }
-export function currentDoseTime(zone:string,increment:5|10,at=Date.now()):{date:string;time:string;administeredAt:string;disambiguation?:Dose['disambiguation']} {
-  if(![5,10].includes(increment)||!Number.isFinite(at))throw new RangeError('Choose a valid time and a 5 or 10 minute increment.');
+export function currentDoseTime(zone:string,increment:TimeIncrementMinutes,at=Date.now()):{date:string;time:string;administeredAt:string;disambiguation?:Dose['disambiguation']} {
+  if(![1,5,10].includes(increment)||!Number.isFinite(at))throw new RangeError('Choose a valid time and a 1, 5 or 10 minute increment.');
   // Round the local clock, not the UTC clock (some zones have 45-minute offsets).
   // If a historical clock jump skipped that rounded time, step backward until
   // a real local boundary is found. A default time must never be in the future.
@@ -226,8 +226,52 @@ function amountLabel(dose:Dose):string {
   if(dose.amountBasis==='first listed ingredient'&&dose.ingredients?.length)return `${dose.ingredients.map(i=>i.amountMg).join(' / ')} mg`;
   return `${dose.amountMg} mg`;
 }
-interface Props {dose:Dose;index:number;profile:Profile;onChange:(d:Dose)=>void;onRemove?:()=>void;onDuplicate?:()=>void;actual?:boolean;productIds?:string[];}
-export default function DoseEditor({dose,index,profile,onChange,onRemove,onDuplicate,actual,productIds}:Props){
+export interface DoseStrengthChoice {productId:string;packageStrength:string;}
+/** Group favorites for display, retaining the product identity behind every choice. */
+export function doseStrengthChoices(dose:Dose,favorites?:readonly Favorite[]):DoseStrengthChoice[] {
+  const product=products.find(item=>item.id===dose.productId);
+  if(!product)return dose.packageStrength||dose.strength?[{productId:dose.productId,packageStrength:dose.packageStrength||dose.strength}]:[];
+  const options=new Map<string,DoseStrengthChoice>(),groupId=medicationDisplay(product).groupId;
+  const add=(source:Product,strength:string,replace=false)=>{
+    try{
+      const resolved=resolvePackageStrength(source,strength),key=parseCustomStrength(source,resolved);
+      if(replace||!options.has(key))options.set(key,{productId:source.id,packageStrength:source.strengths.find(value=>parseCustomStrength(source,value)===key)??key});
+    }catch{/* An invalid favorite must not silently choose a different package. */}
+  };
+  if(favorites===undefined)product.strengths.forEach(strength=>add(product,strength));
+  else for(const favorite of favorites){
+    const source=products.find(item=>item.id===favorite.productId);
+    if(source&&medicationDisplay(source).groupId===groupId)add(source,favorite.packageStrength||favorite.strength);
+  }
+  // A removed favorite may still be the original strength of a record. Unlisted
+  // historical/custom values remain visible in the existing Custom input.
+  const current=dose.packageStrength??dose.strength;
+  try{
+    const key=parseCustomStrength(product,resolvePackageStrength(product,current));
+    if(options.has(key)||product.strengths.some(value=>parseCustomStrength(product,value)===key))add(product,current,true);
+  }catch{/* Keep incomplete custom input visible and unsavable. */}
+  return [...options.values()];
+}
+export function doseStrengthOptions(dose:Dose,favorites?:readonly Favorite[]):string[] {
+  return doseStrengthChoices(dose,favorites).map(choice=>choice.packageStrength);
+}
+/** Changing a grouped strength explicitly selects its saved product, not its model. */
+export function selectDoseStrength(dose:Dose,choice:DoseStrengthChoice,zone:string):Dose {
+  const next=choice.productId===dose.productId?dose:updateDose(dose,{productId:choice.productId},zone);
+  return updateDose(next,{packageStrength:choice.packageStrength,quantity:dose.quantity},zone);
+}
+/** A new medication group starts with its first saved favorite and default quantity. */
+export function selectDoseMedication(dose:Dose,productId:string,favorites:readonly Favorite[]|undefined,zone:string):Dose {
+  const product=products.find(item=>item.id===productId);
+  const favorite=product&&favorites?.find(item=>{
+    const source=products.find(p=>p.id===item.productId);
+    return source&&medicationDisplay(source).groupId===medicationDisplay(product).groupId;
+  });
+  const next=updateDose(dose,{productId:favorite?.productId??productId},zone);
+  return favorite?updateDose(next,{packageStrength:favorite.packageStrength||favorite.strength,quantity:favorite.quantity},zone):next;
+}
+interface Props {dose:Dose;index:number;profile:Profile;onChange:(d:Dose)=>void;onRemove?:()=>void;onDuplicate?:()=>void;actual?:boolean;productIds?:string[];favorites?:readonly Favorite[];}
+export default function DoseEditor({dose,index,profile,onChange,onRemove,onDuplicate,productIds,favorites}:Props){
   const [removalDraft,setRemovalDraft]=useState<{value:string;disambiguation?:Dose['disambiguation'];error:string;requiresOccurrence:boolean}|null>(null);
   const [customMode,setCustomMode]=useState(false),[customDraft,setCustomDraft]=useState<string|null>(null);
   useEffect(()=>{setCustomMode(false);setCustomDraft(null);},[dose.id,dose.productId]);
@@ -240,20 +284,20 @@ export default function DoseEditor({dose,index,profile,onChange,onRemove,onDupli
   const date=local.date,time=local.time;
   if(date&&time&&!timeError){try{localToInstant(date,time,profile.timeZone,disambiguation);}catch(e){timeError=(e as Error).message;}}
   const update=(patch:Partial<Dose>)=>onChange(updateDose({...dose,date,time,disambiguation},patch,profile.timeZone));
-  const illustrative=!modelGroup(dose).reference,inputError=dose.productId?doseInputError(dose):'';
+  const inputError=dose.productId?doseInputError(dose):'';
   const timeErrorId=`dose-time-error-${dose.id}`,inputErrorId=`dose-input-error-${dose.id}`;
   const strengthDescriptionId=`dose-strength-unit-${dose.id}`,quantityDescriptionId=`dose-quantity-unit-${dose.id}`;
   const amountError=!!inputError&&!inputError.toLowerCase().includes('patch removal');
   const quantityIncrement=quantityStep(dose),lowerQuantity=steppedQuantity(dose,-1),higherQuantity=steppedQuantity(dose,1);
   const packageStrength=dose.packageStrength??p?.strengths.find(s=>s.split('/')[0]===dose.strength)??dose.strength;
   const strengthUnit=dose.strengthUnit??p?.strengthUnit??'unit not recorded';
-  const listedStrength=p?.strengths.find(value=>{try{return parseCustomStrength(p,value)===parseCustomStrength(p,packageStrength);}catch{return false;}});
+  const strengthChoices=doseStrengthChoices(dose,favorites),strengthOptions=strengthChoices.map(choice=>choice.packageStrength);
+  const listedStrength=p&&strengthOptions.find(value=>{try{return parseCustomStrength(p,value)===parseCustomStrength(p,packageStrength);}catch{return false;}});
   const customStrength=!!p&&(customMode||!listedStrength);
   const combination=p?.strengths[0]?.includes('/');
-  const options=groupMedicationProducts(products.filter(item=>productIds===undefined||productIds.includes(item.id)||item.id===dose.productId)).map(group=>({group,product:group.products.find(item=>item.id===dose.productId)??group.defaultProduct}));
-  const increment=profile.timeIncrementMinutes===10?10:5;
+  const options=groupMedicationProducts(products.filter(item=>productIds===undefined||productIds.includes(item.id)||item.id===dose.productId)).map(group=>({group,product:group.products.find(item=>item.id===dose.productId)??group.products.find(item=>item.id===favorites?.find(favorite=>group.products.some(p=>p.id===favorite.productId))?.productId)??group.defaultProduct}));
+  const increment=profile.timeIncrementMinutes===1?1:profile.timeIncrementMinutes===10?10:5;
   const useCurrentTime=()=>onChange({...dose,...currentDoseTime(profile.timeZone,increment),timeZone:profile.timeZone});
-  const canShift=!!date&&!!time&&!timeError;
   let savedRemovalInput='',savedRemovalOccurrence:Dose['disambiguation'];
   if(dose.removalAt){try{const local=instantToLocal(dose.removalAt,profile.timeZone);savedRemovalInput=`${local.date}T${local.time}`;savedRemovalOccurrence=occurrenceAt(dose.removalAt,profile.timeZone);}catch{/* Existing invalid values are reported by doseInputError. */}}
   const removal=removalDraft??{value:savedRemovalInput,disambiguation:savedRemovalOccurrence,error:'',requiresOccurrence:!!savedRemovalOccurrence};
@@ -265,30 +309,23 @@ export default function DoseEditor({dose,index,profile,onChange,onRemove,onDupli
     if(!result.error&&result.dose!==dose)onChange(result.dose);
   }
   return <div className={`dose-editor ${!dose.administeredAt?'pending':''}`}>
-    <div className="dose-row"><div className="dose-number"><i style={{background:colors[index%colors.length]}}/><span>Dose {index+1}</span><small>{historical?'Historical · D':!dose.productId||!dose.administeredAt?'Pending':illustrative?(dose.assumptions?.accepted?'Saved illustration':'No curve'):p?.evidence==='A'?'Published profile':'Parameter estimate'}</small></div>
-    <label className="field medication-field"><span>Medication</span><select aria-label={`Dose ${index+1} medication`} value={dose.productId} onChange={e=>update({productId:e.target.value})}><option value="">Choose medication</option>{options.map(({group,product})=><option key={group.id} value={product.id}>{group.title}</option>)}{historical&&<option value={dose.productId}>{dose.productName||'Historical medication'} · {dose.formulation||'Formulation not recorded'}</option>}</select></label>
-    <div className="field strength-field"><label htmlFor={`dose-strength-${dose.id}`} id={strengthDescriptionId}>{dose.productId?`Strength · ${strengthUnit}`:'Strength'}</label><select aria-label={`Dose ${index+1} strength`} disabled={!p} id={`dose-strength-${dose.id}`} aria-invalid={amountError||undefined} aria-describedby={`${strengthDescriptionId}${amountError?` ${inputErrorId}`:''}`} value={customStrength?'custom':listedStrength??packageStrength} onChange={e=>{setCustomDraft(null);if(e.target.value==='custom'){setCustomMode(true);}else{setCustomMode(false);update({packageStrength:e.target.value});}}}>{!packageStrength&&<option value="">—</option>}{p?.strengths.map(s=><option key={s} value={s}>{s}</option>)}{p&&<option value="custom">Custom</option>}{!p&&packageStrength&&<option value={packageStrength}>{packageStrength}</option>}</select>{customStrength&&<div className="dose-custom-strength"><input aria-label={`Dose ${index+1} custom strength in ${strengthUnit}`} aria-invalid={amountError||undefined} aria-describedby={`${strengthDescriptionId}${combination?` dose-strength-order-${dose.id}`:''}${amountError?` ${inputErrorId}`:''}`} type="text" inputMode={combination?'text':'decimal'} maxLength={100} autoComplete="off" spellCheck={false} value={customDraft??packageStrength} onFocus={()=>setCustomDraft(packageStrength)} onBlur={()=>setCustomDraft(null)} onChange={e=>{setCustomDraft(e.target.value);onChange(updateCustomStrength(dose,e.target.value,profile.timeZone));}}/>{combination&&<small id={`dose-strength-order-${dose.id}`}>{p?.ingredients?.map(item=>item.name).join(' / ')||'All ingredient strengths in package order'}</small>}</div>}</div>
+    <div className="dose-row"><div className="dose-number"><i style={{background:colors[index%colors.length]}}/><span>Dose {index+1}</span></div>
+    <label className="field medication-field"><span>Medication</span><select aria-label={`Dose ${index+1} medication`} value={dose.productId} onChange={e=>onChange(selectDoseMedication({...dose,date,time,disambiguation},e.target.value,favorites,profile.timeZone))}><option value="">Choose medication</option>{options.map(({group,product})=><option key={group.id} value={product.id}>{group.title}</option>)}{historical&&<option value={dose.productId}>{dose.productName||'Historical medication'} · {dose.formulation||'Formulation not recorded'}</option>}</select></label>
+    <div className="field strength-field"><label htmlFor={`dose-strength-${dose.id}`} id={strengthDescriptionId}>{dose.productId?`Strength · ${strengthUnit}`:'Strength'}</label><select aria-label={`Dose ${index+1} strength`} disabled={!p} id={`dose-strength-${dose.id}`} aria-invalid={amountError||undefined} aria-describedby={`${strengthDescriptionId}${amountError?` ${inputErrorId}`:''}`} value={customStrength?'custom':listedStrength??packageStrength} onChange={e=>{setCustomDraft(null);if(e.target.value==='custom'){setCustomMode(true);}else{setCustomMode(false);const choice=strengthChoices.find(item=>item.packageStrength===e.target.value);if(choice)onChange(selectDoseStrength({...dose,date,time,disambiguation},choice,profile.timeZone));}}}>{!packageStrength&&<option value="">—</option>}{p&&strengthOptions.map(s=><option key={s} value={s}>{s}</option>)}{p&&<option value="custom">Custom</option>}{!p&&packageStrength&&<option value={packageStrength}>{packageStrength}</option>}</select>{customStrength&&<div className="dose-custom-strength"><input aria-label={`Dose ${index+1} custom strength in ${strengthUnit}`} aria-invalid={amountError||undefined} aria-describedby={`${strengthDescriptionId}${combination?` dose-strength-order-${dose.id}`:''}${amountError?` ${inputErrorId}`:''}`} type="text" inputMode={combination?'text':'decimal'} maxLength={100} autoComplete="off" spellCheck={false} value={customDraft??packageStrength} onFocus={()=>setCustomDraft(packageStrength)} onBlur={()=>setCustomDraft(null)} onChange={e=>{setCustomDraft(e.target.value);onChange(updateCustomStrength(dose,e.target.value,profile.timeZone));}}/>{combination&&<small id={`dose-strength-order-${dose.id}`}>{p?.ingredients?.map(item=>item.name).join(' / ')||'All ingredient strengths in package order'}</small>}</div>}</div>
     <div className="field quantity-field"><label htmlFor={`dose-quantity-${dose.id}`} id={quantityDescriptionId}>{dose.productId&&dose.unit?`Quantity · ${dose.unit}`:'Quantity'}</label><div className="dose-quantity-stepper"><button type="button" disabled={lowerQuantity===null} aria-label={`Decrease Dose ${index+1} quantity by ${quantityIncrement} ${dose.unit||'unit'}`} onClick={()=>{if(lowerQuantity!==null)update({quantity:lowerQuantity});}}>−</button><input id={`dose-quantity-${dose.id}`} aria-label={`Dose ${index+1} quantity`} aria-invalid={amountError||undefined} aria-describedby={`${quantityDescriptionId}${amountError?` ${inputErrorId}`:''}`} type="number" inputMode="decimal" min="0.000000001" max="10000" step="any" value={dose.quantity} onChange={e=>update({quantity:e.target.value})} onKeyDown={event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();const next=event.key==='ArrowUp'?higherQuantity:lowerQuantity;if(next!==null)update({quantity:next});}}}/><button type="button" disabled={higherQuantity===null} aria-label={`Increase Dose ${index+1} quantity by ${quantityIncrement} ${dose.unit||'unit'}`} onClick={()=>{if(higherQuantity!==null)update({quantity:higherQuantity});}}>+</button></div></div>
     <label className="field date-field"><span>Date</span><input aria-label={`Dose ${index+1} date`} aria-invalid={!!timeError||undefined} aria-describedby={timeError?timeErrorId:undefined} type="date" value={date} onInput={e=>update({date:e.currentTarget.value})}/></label>
-    <div className="field time-field"><label htmlFor={`dose-time-${dose.id}`}>Time</label><div className="dose-time-desktop"><input id={`dose-time-${dose.id}`} aria-label={`Dose ${index+1} time`} aria-invalid={!!timeError||undefined} aria-describedby={timeError?timeErrorId:undefined} type="time" step={increment*60} value={time} onInput={e=>update({time:e.currentTarget.value})}/><div className="time-adjustments"><button type="button" className="text-button" disabled={!canShift} aria-label={`Move Dose ${index+1} ${increment} minutes earlier`} onClick={()=>onChange(shiftDoseTime({...dose,date,time,disambiguation},-increment,profile.timeZone))}>−{increment}</button><button type="button" className="text-button" aria-label={`Use current time for Dose ${index+1}`} onClick={useCurrentTime}>Now</button><button type="button" className="text-button" disabled={!canShift} aria-label={`Move Dose ${index+1} ${increment} minutes later`} onClick={()=>onChange(shiftDoseTime({...dose,date,time,disambiguation},increment,profile.timeZone))}>+{increment}</button></div></div><div className="dose-time-mobile" aria-describedby={timeError?timeErrorId:undefined}><MobileTimePicker value={time} minuteStep={increment} timeFormat={profile.timeFormat} label={`Choose Dose ${index+1} time`} invalid={!!timeError} describedBy={timeError?timeErrorId:undefined} onChange={selected=>{if(selected!==time)update({time:selected});}} onNow={useCurrentTime}/></div></div>
+    <div className="field time-field"><label htmlFor={`dose-time-${dose.id}`}>Time</label><div className="dose-time-inline"><MobileTimePicker triggerId={`dose-time-${dose.id}`} value={time} minuteStep={increment} timeFormat={profile.timeFormat} label={`Dose ${index+1} time`} title="Dose time" invalid={!!timeError} describedBy={timeError?timeErrorId:undefined} onChange={selected=>{if(selected!==time)update({time:selected});}}/><button type="button" className="text-button dose-time-now" aria-label={`Use current time for Dose ${index+1}`} onClick={useCurrentTime}>Now</button></div></div>
     <div className="row-actions">{onDuplicate&&<button type="button" className="icon-button" title={`Duplicate Dose ${index+1}`} aria-label={`Duplicate Dose ${index+1}`} onClick={onDuplicate}><Copy size={16}/></button>}{onRemove&&<button type="button" className="icon-button" title={`Remove Dose ${index+1}`} aria-label={`Remove Dose ${index+1}`} onClick={onRemove}><Trash2 size={16}/></button>}</div></div>
     {timeError&&<div className="inline-error" id={timeErrorId} role="alert">{timeError}{/ambig|twice|multiple/i.test(timeError)&&<label>Clock occurrence <select value={disambiguation||''} onChange={e=>update({disambiguation:e.target.value as 'earlier'|'later'})}><option value="">Choose an occurrence</option><option value="earlier">Earlier occurrence</option><option value="later">Later occurrence</option></select></label>}</div>}
     {inputError&&<p className="inline-error" id={inputErrorId} role="alert">{inputError}</p>}
     {dose.productId&&<div className="dose-model-footer">
       <span className="dose-amount">{!dose.amountMg?'Amount incomplete':`${dose.quantity} ${dose.unit} × ${packageStrength} ${strengthUnit} = ${amountLabel(dose)}`}</span>
       <details className="dose-formula-details"><summary aria-label={`Dose ${index+1} formula`}>Formula <ChevronDown size={12}/></summary><DoseFormula dose={dose}/></details>
-      <details className="dose-record-details"><summary>Record details <ChevronDown size={12}/></summary><div className="dose-record-content">
-      <label className="field"><span>Notes {actual?'about this administration':''}</span><textarea value={dose.note??''} onChange={e=>update({note:e.target.value})} placeholder="Optional"/></label>
-      <label className="field"><span>Manufacturer / labeler</span><input value={dose.manufacturer??''} onChange={e=>update({manufacturer:e.target.value})} placeholder="Optional" maxLength={240}/></label>
-      <label className="check-line"><input type="checkbox" checked={dose.unusual||false} onChange={e=>update({unusual:e.target.checked})}/>Altered administration</label>
     {dose.unit==='patch'&&<div className="patch-removal-editor"><label className="field"><span>Patch removal (local date and time)</span><input type="datetime-local" step={increment*60} value={removal.value} aria-invalid={!!removal.error||(!amountError&&!!inputError)||undefined} aria-describedby={removal.error?removalErrorId:!amountError&&inputError?inputErrorId:undefined} onInput={e=>{
       const value=e.currentTarget.value;
       if(!value&&e.currentTarget.validity.badInput){setRemovalDraft({value,error:'Enter a complete removal date and time.',requiresOccurrence:false});return;}
       changeRemoval(value,value===removal.value?removal.disambiguation:undefined);
     }}/></label>{removal.requiresOccurrence&&<label className="field"><span>Removal clock occurrence</span><select value={removal.disambiguation||''} aria-describedby={removal.error?removalErrorId:undefined} onChange={e=>changeRemoval(removal.value,e.target.value as Dose['disambiguation'])}><option value="">Choose an occurrence</option><option value="earlier">Earlier occurrence</option><option value="later">Later occurrence</option></select></label>}{removal.error&&<p className="inline-error" id={removalErrorId} role="alert">{removal.error} {dose.removalAt?'The existing removal time is unchanged.':'No removal time has been set.'}</p>}</div>}
-      <p>{dose.formulation||'Formulation not recorded'}{historical?' · historical snapshot':''}</p>
-      {!!dose.ingredients?.length&&<p>{dose.unit==='patch'?'Nominal labeled delivery per 9 h: ':''}{dose.ingredients.map(v=>`${v.amountMg} ${v.unit||'mg'} ${v.name}`).join(' + ')}</p>}
-      {dose.quantity&&Number.isFinite(Number(dose.quantity))&&Number(dose.quantity)%1!==0&&dose.unit!=='mL'&&<p>A fractional quantity does not mean this product can be divided. Check the package instructions.</p>}
-      </div></details></div>}
+      </div>}
   </div>;
 }

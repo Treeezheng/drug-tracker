@@ -257,7 +257,7 @@ export async function buildReportPdf(doses: Dose[], profile: Profile, from: stri
   paragraph(`Generated: ${formatInstant(Date.now(), profile)}`, 9);
   paragraph(unsynced > 0
     ? `Sync status: ${unsynced} change${unsynced === 1 ? '' : 's'} pending. This report uses the records currently available on this device; recent offline changes may be missing.`
-    : 'Sync status: no pending changes reported. Records are stored by the local service on this Mac.', 9);
+    : 'Sync status: no pending changes reported.', 9);
   paragraph(MISSING_DATA, 9);
   paragraph('Actual administrations only. Planned, skipped and simulated entries are excluded from consumption totals. This report does not recommend a dose or establish treatment safety.', 9);
 
@@ -483,7 +483,7 @@ export function parseBackup(source: string): AppData {
     text(profile.name, 'profile name', 100, true);
     zone(profile.timeZone);
     if (!['12h', '24h'].includes(String(profile.timeFormat))) throw new Error('Invalid profile time format.');
-    if (profile.timeIncrementMinutes !== undefined && ![5, 10].includes(profile.timeIncrementMinutes as number)) throw new Error('Choose a 5 or 10 minute time increment.');
+    if (profile.timeIncrementMinutes !== undefined && ![1, 5, 10].includes(profile.timeIncrementMinutes as number)) throw new Error('Choose a 1, 5 or 10 minute time increment.');
     boolean(profile.sleepEnabled, 'Sleep enabled');
     boolean(profile.weekendEnabled, 'Weekend enabled');
     for (const field of ['bedtime', 'wakeTime', 'weekendBedtime', 'weekendWakeTime']) clock(profile[field], field, true);

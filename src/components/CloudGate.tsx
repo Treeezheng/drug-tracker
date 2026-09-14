@@ -14,18 +14,21 @@ export default function CloudGate(){
   const [secret,setSecret]=useState(''),[confirmation,setConfirmation]=useState('');
   const [useRecovery,setUseRecovery]=useState(false),[recoveryKey,setRecoveryKey]=useState('');
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
+  const [reauthenticateSetup,setReauthenticateSetup]=useState(false);
   const inFlight=useRef(false),lastLoginPassword=useRef(''),flow=useRef(0);
 
-  function clearSecrets(){setPassword('');setSecret('');setConfirmation('');setRecoveryKey('');lastLoginPassword.current='';setUseRecovery(false);}
+  function clearSecrets(){setPassword('');setSecret('');setConfirmation('');setRecoveryKey('');lastLoginPassword.current='';setUseRecovery(false);setReauthenticateSetup(false);}
   function resetFlow(next:Stage,message=''){
     flow.current++;client.lock();configureCloudTransport(null);clearSecrets();inFlight.current=false;setBusy(false);setError('');setNotice(message);setStage(next);
   }
   function browse(){resetFlow('guest');}
   async function readSession(){
     const user=await client.session();
-    if(!user)return 'login' as const;
+    if(!user)return {stage:'login' as const,reauthenticateSetup:false};
     const vault=await client.loadVault();
-    return vault.exists?'unlock' as const:'setup' as const;
+    // A resumed cookie cannot establish that the new encryption password differs
+    // from the account password. Authenticate again, then compare only in memory.
+    return vault.exists?{stage:'unlock' as const,reauthenticateSetup:false}:{stage:'login' as const,reauthenticateSetup:true};
   }
   useEffect(()=>{
     // A page restored from the back/forward cache must not retain an unlocked vault.
@@ -74,7 +77,7 @@ export default function CloudGate(){
   }
   function beginSignIn(){
     resetFlow('loading');
-    void perform(async current=>{const next=await readSession();if(current())setStage(next);},'login');
+    void perform(async current=>{const next=await readSession();if(current()){setReauthenticateSetup(next.reauthenticateSetup);setStage(next.stage);}},'login');
   }
   function beginRegistration(){resetFlow('register');}
   async function submit(event:React.FormEvent){
@@ -87,6 +90,7 @@ export default function CloudGate(){
         const vault=await client.loadVault();if(current())setStage(vault.exists?'unlock':'setup');return;
       }
       if(stage==='setup'){
+        if(!lastLoginPassword.current){setSecret('');setConfirmation('');setReauthenticateSetup(true);setStage('login');throw new Error('Sign in again before setting your encryption password.');}
         if([...secret].length<12)throw new Error('Use an encryption password of at least 12 characters.');
         if(secret!==confirmation)throw new Error('The encryption passwords do not match.');
         if(secret===lastLoginPassword.current)throw new Error('Use a different password for encryption.');
@@ -116,7 +120,7 @@ export default function CloudGate(){
       <p className="muted">Without the encryption password or this key, your records cannot be recovered.</p>
       <button className="button primary full" onClick={()=>{try{openRecords();}catch(cause){setError((cause as Error).message);}}}>I’ve saved my key</button>
     </>:<form className="auth-form" onSubmit={submit}>
-      {stage==='login'||stage==='register'?<><p className="muted">{stage==='register'?'Account records are encrypted in this browser before upload. Your guest simulation stays separate.':'Sign in to view or log your actual medication records.'}</p><label className="field"><span>Username</span><input autoFocus autoComplete="username" name="username" value={username} onChange={e=>setUsername(e.target.value)} required disabled={busy} minLength={stage==='register'?3:undefined} maxLength={64} pattern={stage==='register'?'[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,63}':undefined} aria-describedby={stage==='register'?'cloud-username-hint':undefined} autoCapitalize="none" spellCheck={false}/></label>{stage==='register'&&<p className="field-hint" id="cloud-username-hint">3–64 letters, numbers, periods, underscores or hyphens.</p>}<label className="field"><span>Account password</span><input type="password" name="password" autoComplete={stage==='register'?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} required disabled={busy} minLength={stage==='register'?10:undefined} maxLength={256}/></label>{stage==='register'&&<p className="field-hint">At least 10 characters. You’ll set a separate encryption password next.</p>}</>:<>
+      {stage==='login'||stage==='register'?<><p className="muted">{stage==='register'?'Account records are encrypted in this browser before upload. Your guest simulation stays separate.':reauthenticateSetup?'Sign in again before creating your encrypted records. The two passwords will be checked in this browser.':'Sign in to view or log your actual medication records.'}</p><label className="field"><span>Username</span><input autoFocus autoComplete="username" name="username" value={username} onChange={e=>setUsername(e.target.value)} required disabled={busy} minLength={stage==='register'?3:undefined} maxLength={64} pattern={stage==='register'?'[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,63}':undefined} aria-describedby={stage==='register'?'cloud-username-hint':undefined} autoCapitalize="none" spellCheck={false}/></label>{stage==='register'&&<p className="field-hint" id="cloud-username-hint">3–64 letters, numbers, periods, underscores or hyphens.</p>}<label className="field"><span>Account password</span><input type="password" name="password" autoComplete={stage==='register'?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} required disabled={busy} minLength={stage==='register'?10:undefined} maxLength={256}/></label>{stage==='register'&&<p className="field-hint">At least 10 characters. You’ll set a separate encryption password next.</p>}</>:<>
         <p className="muted">{stage==='setup'?'Use a password different from your account password. It encrypts your records in this browser. Guest simulations are not uploaded.':'Your encryption password stays in this browser.'}</p>
         <label className="field"><span>{useRecovery&&stage==='unlock'?'Recovery key':'Encryption password'}</span><input type={useRecovery&&stage==='unlock'?'text':'password'} name="vault-secret" autoComplete="off" autoFocus value={secret} onChange={e=>setSecret(e.target.value)} required disabled={busy} minLength={stage==='setup'?12:undefined} maxLength={1024} spellCheck={false}/></label>
         {stage==='setup'&&<label className="field"><span>Confirm encryption password</span><input type="password" autoComplete="off" value={confirmation} onChange={e=>setConfirmation(e.target.value)} required disabled={busy} maxLength={1024}/></label>}

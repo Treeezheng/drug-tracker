@@ -6,5 +6,5 @@ export function medicationLabel(id: string, name: string): string {
 
 export default function MedicationName({id,name}:{id:string;name:string}) {
   const display=medicationDisplay({id,name});
-  return <span className="medication-name">{display.title}{display.variant&&<small className="medication-brand">{display.variant}</small>}</span>;
+  return <span className="medication-name"><span className="medication-title">{display.title}</span>{display.variant&&<small className="medication-brand">{display.variant}</small>}</span>;
 }

@@ -107,7 +107,7 @@ function validate(kind, id, data) {
     if (payload.name !== undefined) textField(payload.name, 'name', 100, false);
     zone(payload.timeZone);
     if (!['12h', '24h'].includes(payload.timeFormat)) bad('Choose a 12h or 24h time format.');
-    if (payload.timeIncrementMinutes !== undefined && ![5, 10].includes(payload.timeIncrementMinutes)) bad('Choose a 5 or 10 minute time increment.');
+    if (payload.timeIncrementMinutes !== undefined && ![1, 5, 10].includes(payload.timeIncrementMinutes)) bad('Choose a 1, 5 or 10 minute time increment.');
     for (const field of ['sleepEnabled', 'weekendEnabled']) {
       if (payload[field] !== undefined && typeof payload[field] !== 'boolean') bad(`Invalid ${field}.`);
     }

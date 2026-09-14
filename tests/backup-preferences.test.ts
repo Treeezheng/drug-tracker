@@ -14,7 +14,7 @@ const backup = (savedProfile: object = profile, savedScenario: object = scenario
 });
 
 test('backup preserves supported time increments and complete scenario views, and accepts legacy omissions', () => {
-  for (const timeIncrementMinutes of [5, 10]) for (const days of [1, 2, 3]) {
+  for (const timeIncrementMinutes of [1, 5, 10]) for (const days of [1, 2, 3]) {
     const saved = parseBackup(backup({ ...profile, timeIncrementMinutes }, { ...scenario, view: { ...view, days } }));
     assert.equal(saved.profile?.timeIncrementMinutes, timeIncrementMinutes);
     assert.deepEqual(saved.scenarios[0].view, { ...view, days });
@@ -25,7 +25,7 @@ test('backup preserves supported time increments and complete scenario views, an
 });
 
 test('backup rejects unsupported increments and incomplete or invalid scenario views before preview', () => {
-  for (const timeIncrementMinutes of [0, 1, 15, 5.5, '5', null]) {
+  for (const timeIncrementMinutes of [-1, 0, 2, 15, 5.5, '1', '5', null]) {
     assert.throws(() => parseBackup(backup({ ...profile, timeIncrementMinutes })), /time increment/);
   }
   for (const invalidView of [null, [], {},

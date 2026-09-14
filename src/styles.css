@@ -281,7 +281,7 @@ tr:last-child td { border-bottom: 0; }
 .checkin-record { padding: 16px 0; border-top: 1px solid var(--border); }
 .checkin-record span { color: var(--muted); margin-left: 14px; font-size: 13px; }
 .checkin-record p { margin-top: 7px; }
-.app-footer { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); margin-top: 32px; padding-top: 18px; color: var(--muted); font-size: 12px; }
+.app-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); margin-top: 32px; padding-top: 18px; color: var(--muted); font-size: 12px; }
 
 /* Native dialogs retain focus behavior; error text stays inside the form. */
 .modal { width: min(520px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 40px); overflow-y: auto; padding: 24px; border: 1px solid #d0d7e0; border-radius: 10px; background: #fff; color: var(--text); box-shadow: 0 16px 60px #1d293329; }
@@ -479,7 +479,7 @@ tr:last-child td { border-bottom: 0; }
 .taken-time small, .taken-product small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
 .taken-product { min-width: 0; overflow-wrap: anywhere; }
 .taken-product strong { font-weight: 500; }
-.dose-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 18px 24px; border-top: 1px solid var(--border); }
+.dose-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 24px; border-top: 1px solid var(--border); }
 .favorite-chip { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--muted); font-size: 12px; }
 .favorite-chip:hover { background: var(--soft); color: var(--text); }
 .advanced-options { margin-bottom: 20px; }
@@ -518,6 +518,10 @@ tr:last-child td { border-bottom: 0; }
 .record-details p { padding: 7px 0; }
 .methods-panel { margin-top: 20px; }
 .methods-panel > summary { color: var(--text); font-weight: 500; }
+.backup-panel > summary { color: var(--text); font-weight: 500; }
+.backup-panel > .data-actions { margin-top: 16px; }
+.backup-panel > .inline-error { margin-top: 12px; }
+.account-sign-out { flex-shrink: 0; min-height: 44px; }
 .methods-body p { font-size: 13px; color: var(--muted); margin-top: 14px; }
 .source-row { padding-block: 16px; border-top: 1px solid var(--border); }
 .source-row a { font-size: 13px; line-height: 1.6; }
@@ -627,6 +631,8 @@ tr:last-child td { border-bottom: 0; }
 .row-state .button:not(:disabled) { background: #f0f4f9; color: #345b83; border-color: #d4e0ed; }
 .row-state .button:not(:disabled):hover { background: #e7eef6; }
 .chart-legend { font-size: 12px; color: var(--muted); }
+.chart-support-note { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; margin: 2px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.chart-support-note .chart-no-data { white-space: nowrap; }
 .chart-svg text, .reading-value { font-family: Inter, sans-serif; font-variant-numeric: tabular-nums; }
 .reading-control { padding-block: 5px 10px; }
 .chart-details > summary, .advanced-options > summary, .page-references > summary { font-size: 12px; font-weight: 400; color: var(--muted); }
@@ -754,14 +760,29 @@ tr:last-child td { border-bottom: 0; }
   .simulation-toolbar > .segmented { grid-column: 1/-1; justify-self: start; }
 }
 
-/* One medicine label, with the individual dose colors stacked beside it. */
-.chart-legend .legend-medication { align-items: center; min-width: 0; max-width: 100%; }
-.chart-legend .legend-swatches { display: flex; flex-direction: column; gap: 5px; flex: 0 0 17px; }
+/* Align the main name, dose colors and strength; reserve a separate brand row. */
+.chart-legend { align-items: flex-start; }
+.chart-legend .legend-medication { display: inline-grid; grid-template-columns: 17px minmax(0, 1fr) max-content; align-items: center; gap: 3px 6px; min-width: 0; max-width: 100%; }
+.chart-legend .legend-swatches { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 5px; }
 .chart-legend .legend-swatches i { width: 17px; min-height: 2px; }
-.chart-legend .legend-label { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.chart-legend .legend-strength { white-space: nowrap; }
-.reading-values { display: flex; flex: 1; justify-content: flex-end; align-items: flex-start; gap: 12px 22px; flex-wrap: wrap; min-width: 0; }
+.chart-legend .legend-label, .chart-legend .medication-name { display: contents; }
+.chart-legend .medication-title { grid-column: 2; grid-row: 1; min-width: 0; overflow-wrap: anywhere; }
+.chart-legend .medication-name .medication-brand { grid-column: 2; grid-row: 2; margin: 0; }
+.chart-legend .legend-strength { grid-column: 3; grid-row: 1; max-width: 14ch; overflow-wrap: anywhere; }
+.reading-control { justify-content: center; gap: 10px 20px; }
+.reading-values { display: flex; flex: 0 1 auto; justify-content: center; align-items: flex-start; gap: 12px 22px; flex-wrap: wrap; min-width: 0; max-width: 100%; border-inline-start: 1px solid var(--border); padding-inline-start: 20px; }
 .reading-values .reading-value { display: flex; flex-direction: column; text-align: right; line-height: 1.35; overflow-wrap: anywhere; }
 .reading-values .reading-value strong { font-size: 24px; font-weight: 600; letter-spacing: -.5px; }
 .reading-values .reading-value small { font-size: 12px; color: var(--muted); }
 .chart-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.reading-control .reading-time { font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+.row-state .button.add-record:not(:disabled) { background: #16834a; border-color: #16834a; color: #fff; }
+.row-state .button.add-record:not(:disabled):hover { background: #126c3d; border-color: #126c3d; }
+.planned-row .row-state { padding-bottom: 12px; }
+.inventory-medication { display: block; min-width: 0; max-width: 100%; }
+.inventory-medication .inventory-medication-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+.inventory-medication .medication-title { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 18px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.inventory-medication .inventory-package { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 14px; font-weight: 500; color: var(--muted); line-height: 1.5; }
+.inventory-medication > .medication-brand { display: block; margin-top: 3px; font-size: 11px; font-weight: 400; font-style: italic; color: var(--muted); line-height: 1.4; }
+.inventory-row > span { min-width: 0; }
+@media (max-width: 700px) { .dose-actions.only-add { display: none; } }

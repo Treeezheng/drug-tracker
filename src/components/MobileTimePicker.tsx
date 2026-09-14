@@ -1,16 +1,18 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Clock3 } from 'lucide-react';
+import type { TimeIncrementMinutes } from '../lib/types';
 
 export interface MobileTimePickerProps {
   value:string;
-  minuteStep:5|10;
+  minuteStep?:TimeIncrementMinutes;
+  triggerId?:string;
   timeFormat:'12h'|'24h';
   label:string;
+  title?:string;
   invalid?:boolean;
   describedBy?:string;
   onChange:(time:string)=>void;
-  onNow:()=>void;
 }
 const pad=(value:number)=>String(value).padStart(2,'0');
 function parseTime(value:string){
@@ -18,7 +20,8 @@ function parseTime(value:string){
   const [hour,minute]=value.split(':').map(Number);
   return {hour,minute};
 }
-export function minuteChoices(step:5|10,original:number|null):number[]{
+export function minuteChoices(step:TimeIncrementMinutes,original:number|null):number[]{
+  if(![1,5,10].includes(step))throw new RangeError('Choose a 1, 5 or 10 minute time increment.');
   const values=Array.from({length:60/step},(_,index)=>index*step);
   if(original!==null&&Number.isInteger(original)&&original>=0&&original<60&&!values.includes(original))values.push(original);
   return values.sort((a,b)=>a-b);
@@ -48,28 +51,69 @@ function positionWheel(element:HTMLElement|null,index:number){
   element.scrollTo({top:element.scrollTop+rect.top+rect.height/2-center,behavior:'instant'});
 }
 
-export default function MobileTimePicker({value,minuteStep,timeFormat,label,invalid,describedBy,onChange,onNow}:MobileTimePickerProps){
+/** Keep a desktop picker beside its trigger, choosing the side with room. */
+export function pickerPosition(anchor:{left:number;top:number;bottom:number},panel:{width:number;height:number},viewport:{width:number;height:number;left?:number;top?:number}):{left:number;top:number}{
+  const margin=8,gap=6,x=viewport.left??0,y=viewport.top??0;
+  const below=y+viewport.height-anchor.bottom-gap-margin,above=anchor.top-y-gap-margin;
+  const preferred=panel.height<=below||below>=above?anchor.bottom+gap:anchor.top-panel.height-gap;
+  return {
+    left:Math.max(x+margin,Math.min(anchor.left,x+viewport.width-panel.width-margin)),
+    top:Math.max(y+margin,Math.min(preferred,y+viewport.height-panel.height-margin)),
+  };
+}
+function closePicker(sheet:HTMLDialogElement|null){
+  if(!sheet)return;
+  if(typeof sheet.hidePopover==='function'&&sheet.matches(':popover-open'))sheet.hidePopover();
+  if(sheet.open)sheet.close();
+}
+function pickerIsOpen(sheet:HTMLDialogElement):boolean {
+  return sheet.open||(typeof sheet.showPopover==='function'&&sheet.matches(':popover-open'));
+}
+
+export default function MobileTimePicker({value,minuteStep=5,triggerId,timeFormat,label,title,invalid,describedBy,onChange}:MobileTimePickerProps){
   const id=useId(),dialog=useRef<HTMLDialogElement>(null),trigger=useRef<HTMLButtonElement>(null);
   const hours=useRef<HTMLDivElement>(null),minutes=useRef<HTMLDivElement>(null);
-  const [open,setOpen]=useState(false),[draft,setDraft]=useState({hour:0,minute:0}),[originalMinute,setOriginalMinute]=useState<number|null>(null);
+  const [mobile,setMobile]=useState(()=>typeof window!=='undefined'&&window.matchMedia('(max-width: 700px)').matches);
+  const [open,setOpen]=useState(false),[draft,setDraft]=useState(()=>parseTime(value)||{hour:0,minute:0}),[originalMinute,setOriginalMinute]=useState<number|null>(()=>parseTime(value)?.minute??null);
   const minuteValues=useMemo(()=>minuteChoices(minuteStep,originalMinute),[minuteStep,originalMinute]);
   const hourLabel=(hour:number)=>timeFormat==='24h'?pad(hour):`${hour%12||12} ${hour<12?'AM':'PM'}`;
-  function dismiss(){dialog.current?.close();setOpen(false);trigger.current?.focus({preventScroll:true});}
+  function dismiss(){closePicker(dialog.current);setOpen(false);trigger.current?.focus({preventScroll:true});}
   function show(){
+    if(open){dismiss();return;}
     const time=parseTime(value);
     setDraft(time||{hour:0,minute:0});setOriginalMinute(time?.minute??null);setOpen(true);
   }
+  useEffect(()=>{
+    const media=window.matchMedia('(max-width: 700px)');
+    const changed=()=>{closePicker(dialog.current);setOpen(false);setMobile(media.matches);};
+    media.addEventListener('change',changed);
+    return()=>media.removeEventListener('change',changed);
+  },[]);
   useLayoutEffect(()=>{
     if(!open)return;
     const sheet=dialog.current;
     if(!sheet)return;
-    if(!sheet.open)sheet.showModal();
+    const floating=!mobile&&typeof sheet.showPopover==='function';
+    function place(){
+      if(!floating||!trigger.current)return;
+      const viewport=window.visualViewport;
+      const position=pickerPosition(trigger.current.getBoundingClientRect(),sheet!.getBoundingClientRect(),{width:viewport?.width??window.innerWidth,height:viewport?.height??window.innerHeight,left:viewport?.offsetLeft??0,top:viewport?.offsetTop??0});
+      sheet!.style.left=`${position.left}px`;sheet!.style.top=`${position.top}px`;
+    }
+    if(floating){sheet.showPopover();place();}else if(!sheet.open)sheet.showModal();
     positionWheel(hours.current,draft.hour);
     positionWheel(minutes.current,minuteValues.indexOf(draft.minute));
     hours.current?.focus({preventScroll:true});
-    return()=>{if(sheet.open)sheet.close();};
+    const scroll=(event:Event)=>{if(!(event.target instanceof Node)||!sheet.contains(event.target))place();};
+    window.addEventListener('resize',place);window.addEventListener('scroll',scroll,true);
+    window.visualViewport?.addEventListener('resize',place);window.visualViewport?.addEventListener('scroll',place);
+    return()=>{
+      window.removeEventListener('resize',place);window.removeEventListener('scroll',scroll,true);
+      window.visualViewport?.removeEventListener('resize',place);window.visualViewport?.removeEventListener('scroll',place);
+      closePicker(sheet);sheet.style.removeProperty('left');sheet.style.removeProperty('top');
+    };
     // Initialize only on opening; scrolling must never reopen or reposition the sheet.
-  },[open]);
+  },[open,mobile]);
   function choose(kind:'hour'|'minute',index:number){
     const values=kind==='hour'?Array.from({length:24},(_,i)=>i):minuteValues;
     const bounded=Math.max(0,Math.min(values.length-1,index));
@@ -100,9 +144,9 @@ export default function MobileTimePicker({value,minuteStep,timeFormat,label,inva
     dismiss();
   }
   return <>
-    <button ref={trigger} type="button" className="mtp-trigger" aria-label={`${label}: ${timePickerLabel(value,timeFormat)}`} aria-invalid={invalid||undefined} aria-describedby={describedBy} aria-haspopup="dialog" aria-expanded={open} aria-controls={`${id}-sheet`} onClick={show}><Clock3 size={16} aria-hidden="true"/><span>{timePickerLabel(value,timeFormat)}</span></button>
-    <dialog ref={dialog} id={`${id}-sheet`} className="mtp-sheet" aria-labelledby={`${id}-title`} onCancel={event=>{event.preventDefault();dismiss();}}>
-      <div className="mtp-toolbar"><button type="button" onClick={dismiss}>Cancel</button><h2 id={`${id}-title`}>{label}</h2><button type="button" className="mtp-done" onClick={commit}>Done</button></div>
+    <button ref={trigger} id={triggerId} type="button" className="mtp-trigger" aria-label={`${label}: ${timePickerLabel(value,timeFormat)}`} aria-invalid={invalid||undefined} aria-describedby={describedBy} aria-haspopup="dialog" aria-expanded={open} aria-controls={`${id}-sheet`} onClick={show}><Clock3 size={16} aria-hidden="true"/><span>{timePickerLabel(value,timeFormat)}</span></button>
+    <dialog ref={dialog} id={`${id}-sheet`} className="mtp-sheet" popover={mobile?undefined:'auto'} aria-labelledby={`${id}-title`} onToggle={event=>{if(event.newState==='closed'&&!pickerIsOpen(event.currentTarget))setOpen(false);}} onClose={event=>{if(!pickerIsOpen(event.currentTarget))setOpen(false);}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();dismiss();}}} onCancel={event=>{event.preventDefault();event.stopPropagation();dismiss();}}>
+      <div className="mtp-toolbar"><button type="button" onClick={dismiss}>Cancel</button><h2 id={`${id}-title`}>{title||label}</h2><button type="button" className="mtp-done" onClick={commit}>Done</button></div>
       <p id={`${id}-help`} className="mtp-sr-only">Swipe a column, or use the arrow keys. Home and End reach the first and last option. Changes are saved with Done.</p>
       <div className="mtp-wheels">
         <div className="mtp-column"><span aria-hidden="true">Hour</span><div className="mtp-wheel-frame"><div ref={hours} className="mtp-wheel" role="listbox" tabIndex={0} aria-label={`${label} hour`} aria-describedby={`${id}-help`} aria-activedescendant={`${id}-hour-${draft.hour}`} onScroll={()=>readWheel('hour')} onKeyDown={event=>keyboard(event,'hour')}>
@@ -112,7 +156,6 @@ export default function MobileTimePicker({value,minuteStep,timeFormat,label,inva
           {minuteValues.map((minute,index)=><div key={minute} id={`${id}-minute-${minute}`} className="mtp-option" data-wheel-index={index} role="option" aria-selected={draft.minute===minute} onClick={()=>choose('minute',index)}>{pad(minute)}</div>)}
         </div></div></div>
       </div>
-      <button type="button" className="mtp-now" onClick={()=>{onNow();dismiss();}}>Now</button>
     </dialog>
   </>;
 }

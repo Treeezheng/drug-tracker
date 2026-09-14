@@ -1,11 +1,13 @@
 import { createServer } from 'node:http';
-import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { openVaultStore, VaultStoreError } from './vault-store.mjs';
+import { VaultStoreError } from './vault-store.mjs';
+import { CloudError } from './cloud-errors.mjs';
+import { openCloudDatabase, openCloudSqlite } from './cloud-sqlite.mjs';
+export { CloudError } from './cloud-errors.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PREFIX = '/drug/api';
@@ -15,9 +17,6 @@ const scryptAsync = promisify(scrypt);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const publicUser = value => ({ id: value.id, name: value.name });
 
-export class CloudError extends Error {
-  constructor(status, message, details = {}) { super(message); this.name = 'CloudError'; this.status = status; Object.assign(this, details); }
-}
 const invalid = message => { throw new CloudError(400, message); };
 function exactObject(value, keys) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype
@@ -43,66 +42,18 @@ async function passwordMatches(value, encoded) {
   const actual = await scryptAsync(value, fields[4], 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
   return timingSafeEqual(actual, Buffer.from(fields[5], 'hex'));
 }
-function configuration({ dbPath, origin, allowInsecureLoopback = false } = {}) {
-  if (typeof dbPath !== 'string' || !isAbsolute(dbPath)) invalid('Choose an explicit absolute CLOUD_DB_PATH for the cloud edition.');
+function configuration({ dbPath, databaseUrl, origin, allowInsecureLoopback = false, proxyMode } = {}) {
+  if (databaseUrl !== undefined && dbPath !== undefined) invalid('Choose PostgreSQL or a dedicated SQLite path, not both.');
+  if (databaseUrl === undefined && (typeof dbPath !== 'string' || !isAbsolute(dbPath))) invalid('Choose an explicit absolute CLOUD_DB_PATH for the cloud edition.');
+  if (proxyMode !== undefined && proxyMode !== 'heroku') invalid('Unsupported cloud proxy mode.');
   if (typeof origin !== 'string') invalid('Configure an exact CLOUD_ORIGIN before starting the cloud edition.');
   let parsed;
   try { parsed = new URL(origin); } catch { invalid('Invalid cloud origin.'); }
   if (parsed.origin !== origin || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') invalid('Cloud origin must contain only the scheme and exact host.');
   const insecure = parsed.protocol === 'http:';
   if (parsed.protocol !== 'https:' && !(allowInsecureLoopback === true && insecure && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname))) invalid('The cloud origin must use HTTPS; HTTP is allowed only by an explicit loopback development flag.');
-  return { dbPath: resolve(dbPath), origin, host: parsed.host, secure: !insecure };
-}
-
-function openCloudDatabase(dbPath) {
-  mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(dbPath, { timeout: 5000 });
-  try {
-    // Inspect only schema names before enabling journals or changing an existing file.
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name);
-    const allowed = ['cloud_meta', 'cloud_accounts', 'cloud_sessions', 'encrypted_vaults'];
-    if (tables.some(name => !allowed.includes(name))) throw new CloudError(400, 'This is not a dedicated cloud database. Choose a new CLOUD_DB_PATH.');
-    chmodSync(dbPath, 0o600);
-    db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;');
-    try {
-      db.exec('CREATE TABLE IF NOT EXISTS cloud_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), edition TEXT NOT NULL, version INTEGER NOT NULL) STRICT');
-      const version = db.prepare('SELECT edition, version FROM cloud_meta WHERE singleton=1').get();
-      if (version && (version.edition !== 'drug-cloud-encrypted' || ![1, 2].includes(version.version))) throw new CloudError(400, 'Unsupported cloud database version.');
-      if (!version) {
-        if (tables.includes('cloud_accounts') || tables.includes('cloud_sessions')) throw new CloudError(400, 'The existing cloud account database has no supported version.');
-        db.exec(`CREATE TABLE cloud_accounts (
-          id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL
-        ) STRICT;
-        CREATE TABLE cloud_sessions (
-          token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES cloud_accounts(id) ON DELETE CASCADE,
-          expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
-        ) STRICT;`);
-        db.prepare('INSERT INTO cloud_meta VALUES (1,?,2)').run('drug-cloud-encrypted');
-      } else if (version.version === 1) {
-        // Copy accounts and sessions together before dropping the singleton tables.
-        // Keeping their IDs preserves every existing vault and authenticated session.
-        db.exec(`CREATE TABLE cloud_accounts_v2 (
-          id TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL
-        ) STRICT;
-        INSERT INTO cloud_accounts_v2 SELECT id, username, password_hash, name, created_at FROM cloud_accounts;
-        CREATE TABLE cloud_sessions_v2 (
-          token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES cloud_accounts_v2(id) ON DELETE CASCADE,
-          expires_at INTEGER NOT NULL, created_at TEXT NOT NULL
-        ) STRICT;
-        INSERT INTO cloud_sessions_v2 SELECT token_hash, owner_id, expires_at, created_at FROM cloud_sessions;
-        DROP TABLE cloud_sessions;
-        DROP TABLE cloud_accounts;
-        ALTER TABLE cloud_accounts_v2 RENAME TO cloud_accounts;
-        ALTER TABLE cloud_sessions_v2 RENAME TO cloud_sessions;
-        UPDATE cloud_meta SET version=2 WHERE singleton=1;`);
-      }
-      if (db.prepare('PRAGMA foreign_key_check').all().length) throw new CloudError(400, 'Cloud account relationships could not be preserved.');
-      db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return db;
-  } catch (error) { db.close(); throw error; }
+  if (proxyMode === 'heroku' && insecure) invalid('The Heroku cloud origin must use HTTPS.');
+  return { dbPath: dbPath ? resolve(dbPath) : undefined, databaseUrl, origin, host: parsed.host, secure: !insecure, proxyMode };
 }
 
 /** One-time operator action. Never call this through an HTTP route. */
@@ -145,23 +96,26 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 /** API-only by default; the CLI always supplies and validates a cloud frontend build. */
 export async function createCloudServer(options = {}) {
   const config = configuration(options), build = staticBuild(options.distDir);
-  const db = openCloudDatabase(config.dbPath);
-  let vaultStore;
+  const repository = config.databaseUrl !== undefined
+    ? await (await import('./cloud-postgres.mjs')).openCloudPostgres({ ...options, databaseUrl: config.databaseUrl })
+    : openCloudSqlite(config.dbPath);
   let dummyHash;
-  try {
-    vaultStore = openVaultStore({ dbPath: config.dbPath });
-    dummyHash = await passwordHash(randomBytes(32).toString('base64url'));
-  } catch (error) { vaultStore?.close(); db.close(); throw error; }
+  try { dummyHash = await passwordHash(randomBytes(32).toString('base64url')); }
+  catch (error) { await repository.close(); throw error; }
   const cookieName = config.secure ? '__Secure-drug_cloud_session' : 'drug_cloud_dev_session';
   const attemptLimit = options.loginAttemptLimit ?? 30;
   const windowMs = options.loginWindowMs ?? 15 * 60 * 1000;
   const registrationLimit = options.registrationAttemptLimit ?? 10;
   const registrationWindowMs = options.registrationWindowMs ?? 60 * 60 * 1000;
-  if ([attemptLimit, windowMs, registrationLimit, registrationWindowMs].some(value => !Number.isSafeInteger(value) || value < 1)) { vaultStore.close(); db.close(); invalid('Invalid account rate limit.'); }
+  if ([attemptLimit, windowMs, registrationLimit, registrationWindowMs].some(value => !Number.isSafeInteger(value) || value < 1)) { await repository.close(); invalid('Invalid account rate limit.'); }
   const attempts = { login: { count: 0, until: 0 }, register: { count: 0, until: 0 } };
   let verifying = 0, closed = false;
-  function rateLimit(kind = 'login') {
+  async function rateLimit(kind = 'login') {
     const entry = attempts[kind], duration = kind === 'register' ? registrationWindowMs : windowMs;
+    if (repository.consumeRateLimit) {
+      await repository.consumeRateLimit(kind, kind === 'register' ? registrationLimit : attemptLimit, duration);
+      return;
+    }
     if (Date.now() >= entry.until) { entry.count = 0; entry.until = Date.now() + duration; }
     if (++entry.count > (kind === 'register' ? registrationLimit : attemptLimit) || verifying >= 2) throw new CloudError(429, 'Too many account attempts. Please wait before trying again.', { retryAfter: Math.max(1, Math.ceil((entry.until - Date.now()) / 1000)) });
   }
@@ -176,13 +130,12 @@ export async function createCloudServer(options = {}) {
     const value = matches[0].slice(cookieName.length + 1);
     return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
   }
-  function currentUser(req) {
+  async function currentUser(req) {
     const value = token(req);
-    if (!value) return null;
-    return db.prepare('SELECT a.* FROM cloud_accounts a JOIN cloud_sessions s ON a.id=s.owner_id WHERE s.token_hash=? AND s.expires_at>?').get(hash(value), Date.now()) ?? null;
+    return value ? repository.session(hash(value)) : null;
   }
-  function owner(req) {
-    const user = currentUser(req);
+  async function owner(req) {
+    const user = await currentUser(req);
     if (!user) throw new CloudError(401, 'Sign in to access your encrypted vault.');
     if (req.headers['x-dose-owner'] !== user.id) throw new CloudError(401, 'The selected account changed. Sign in again before continuing.');
     return user;
@@ -190,13 +143,13 @@ export async function createCloudServer(options = {}) {
   function cookie(res, value = '') {
     res.setHeader('Set-Cookie', `${cookieName}=${value}; Path=/drug/; HttpOnly; SameSite=Strict; Max-Age=${value ? SESSION_SECONDS : 0}${config.secure ? '; Secure' : ''}`);
   }
-  function issueSession(user) {
+  function newSession() {
     const value = randomBytes(32).toString('base64url');
-    db.prepare('DELETE FROM cloud_sessions WHERE expires_at<=?').run(Date.now());
-    db.prepare('INSERT INTO cloud_sessions VALUES (?,?,?,?)').run(hash(value), user.id, Date.now() + SESSION_SECONDS * 1000, new Date().toISOString());
-    return value;
+    return { value, tokenHash: hash(value), expiresAt: Date.now() + SESSION_SECONDS * 1000 };
   }
   function guards(req) {
+    // Heroku terminates TLS. This transport hint never supplies identity, origin, host or rate-limit keys.
+    if (config.proxyMode === 'heroku' && req.headers['x-forwarded-proto'] !== 'https') throw new CloudError(403, 'Use the configured HTTPS address.');
     if (req.headers.host !== config.host) throw new CloudError(403, 'Untrusted request host.');
     if (req.headers.origin !== undefined && req.headers.origin !== config.origin) throw new CloudError(403, 'Untrusted request origin.');
     if (req.headers['sec-fetch-site'] === 'cross-site') throw new CloudError(403, 'Cross-site requests are not allowed.');
@@ -244,61 +197,50 @@ export async function createCloudServer(options = {}) {
       guards(req);
       const path = new URL(req.url, config.origin).pathname;
       if (path === `${PREFIX}/edition` && req.method === 'GET') return send(res, 200, { edition: 'cloud' });
-      if (path === `${PREFIX}/session` && req.method === 'GET') { const user = currentUser(req); return send(res, 200, { user: user ? publicUser(user) : null }); }
+      if (path === `${PREFIX}/session` && req.method === 'GET') { const user = await currentUser(req); return send(res, 200, { user: user ? publicUser(user) : null }); }
       if (path === `${PREFIX}/auth/register` && req.method === 'POST') {
-        rateLimit('register');
+        await rateLimit('register');
         const input = await body(req);
         exactObject(input, ['username', 'password', ...(input && Object.hasOwn(input, 'name') ? ['name'] : [])]);
         const loginName = username(input.username); password(input.password, true);
         const name = input.name === undefined ? loginName : input.name;
         if (typeof name !== 'string' || !name.trim() || name.length > 100) invalid('Use a display name of 1–100 characters.');
-        if (db.prepare('SELECT id FROM cloud_accounts WHERE username=?').get(loginName)) throw new CloudError(409, 'Username is unavailable.');
+        if (await repository.accountByUsername(loginName)) throw new CloudError(409, 'Username is unavailable.');
         const encoded = await hashWork(() => passwordHash(input.password));
         const user = { id: randomUUID(), name: name.trim() };
-        let value;
-        db.exec('BEGIN IMMEDIATE');
-        try {
-          if (db.prepare('SELECT id FROM cloud_accounts WHERE username=?').get(loginName)) throw new CloudError(409, 'Username is unavailable.');
-          db.prepare('INSERT INTO cloud_accounts (id,username,password_hash,name,created_at) VALUES (?,?,?,?,?)').run(user.id, loginName, encoded, user.name, new Date().toISOString());
-          value = issueSession(user);
-          db.exec('COMMIT');
-        } catch (error) { db.exec('ROLLBACK'); throw error; }
-        cookie(res, value);
+        const session = newSession();
+        await repository.register({ ...user, username: loginName, password_hash: encoded }, session);
+        cookie(res, session.value);
         return send(res, 201, { user });
       }
       if (path === `${PREFIX}/auth/login` && req.method === 'POST') {
-        rateLimit();
+        await rateLimit();
         const input = exactObject(await body(req), ['username', 'password']);
         const loginName = username(input.username); password(input.password);
-        const account = db.prepare('SELECT * FROM cloud_accounts WHERE username=?').get(loginName);
+        const account = await repository.accountByUsername(loginName);
         const matches = await hashWork(() => passwordMatches(input.password, account?.password_hash ?? dummyHash));
         if (!matches || !account) throw new CloudError(401, 'Username or account password is incorrect.');
-        db.exec('BEGIN IMMEDIATE');
-        try {
-          const fresh = db.prepare('SELECT * FROM cloud_accounts WHERE id=? AND password_hash=?').get(account.id, account.password_hash);
-          if (!fresh) throw new CloudError(401, 'The account changed. Sign in again.');
-          const value = issueSession(fresh);
-          db.exec('COMMIT');
-          cookie(res, value);
-          return send(res, 200, { user: publicUser(fresh) });
-        } catch (error) { db.exec('ROLLBACK'); throw error; }
+        const session = newSession();
+        const fresh = await repository.login(account, session);
+        cookie(res, session.value);
+        return send(res, 200, { user: publicUser(fresh) });
       }
       if (path === `${PREFIX}/auth/logout` && req.method === 'POST') {
         const input = await body(req); exactObject(input, []);
-        const user = currentUser(req);
+        const user = await currentUser(req);
         if (user && req.headers['x-dose-owner'] && req.headers['x-dose-owner'] !== user.id) throw new CloudError(401, 'The selected account changed. Sign in again.');
         const value = token(req);
-        if (value) db.prepare('DELETE FROM cloud_sessions WHERE token_hash=?').run(hash(value));
+        if (value) await repository.logout(hash(value), req.headers['x-dose-owner']);
         cookie(res);
         return send(res, 200, { ok: true });
       }
       if (path === `${PREFIX}/vault` && ['GET', 'PUT'].includes(req.method)) {
-        const user = owner(req);
-        if (req.method === 'GET') return send(res, 200, { vault: vaultStore.read(user.id) });
+        const user = await owner(req);
+        if (req.method === 'GET') return send(res, 200, { vault: await repository.readVault(user.id, hash(token(req))) });
         const input = await body(req, VAULT_BODY_LIMIT);
         // Recheck after asynchronous body reading; a logout or session expiry may have occurred.
-        if (owner(req).id !== user.id) throw new CloudError(401, 'The account changed. Sign in again.');
-        return send(res, 200, { vault: vaultStore.write(user.id, input) });
+        if ((await owner(req)).id !== user.id) throw new CloudError(401, 'The account changed. Sign in again.');
+        return send(res, 200, { vault: await repository.writeVault(user.id, hash(token(req)), input) });
       }
       if (path === PREFIX || path.startsWith(`${PREFIX}/`)) throw new CloudError(404, 'This endpoint does not exist.');
       if (build && ['GET', 'HEAD'].includes(req.method)) {
@@ -339,9 +281,10 @@ export async function createCloudServer(options = {}) {
   });
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
-  function closeStorage() { if (!closed) { closed = true; vaultStore.close(); db.close(); } }
-  server.on('close', closeStorage);
+  server.keepAliveTimeout = config.proxyMode === 'heroku' ? 95_000 : 5_000;
+  let closing;
+  function closeStorage() { if (!closed) { closed = true; closing = Promise.resolve(repository.close()); } return closing; }
+  server.on('close', () => { closeStorage().catch(() => {}); });
   return { server, closeStorage, edition: 'cloud' };
 }
 

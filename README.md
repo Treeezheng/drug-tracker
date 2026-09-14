@@ -12,7 +12,7 @@ A small medication tracker built around Abraham Zheng’s personal requirements.
 
 Three pages, with English interface text:
 
-- **Dose Simulation:** a reference chart, independent dose rows, and a collapsed Discomfort check-in. Add a medication from favorites, choose its package strength and quantity, then explicitly mark it **Taken**. New entries default to the current local time. Planned doses do not count toward consumption or history.
+- **Dose Simulation:** a reference chart, independent dose rows, and a collapsed Discomfort check-in. Add a medication from favorites, choose its package strength and quantity, then press the green **Add** button. Future entries are saved as Planned; current or past entries are saved as Taken. A saved plan stays Planned until explicitly confirmed. New entries default to the current local time. Planned doses do not count toward consumption or history.
 - **History:** medication totals and daily bars, selected date ranges, dose corrections, symptom counts and CSV export. Symptom comparisons show same-day records, not causation. Medication PDF exports contain dose records; CSV also includes separate symptom rows.
 - **Settings:** categorized favorites with multiple strengths per medication, time zone and clock preferences, supply receipts and estimated stock, account, backup, privacy and project information.
 
@@ -48,15 +48,15 @@ Vite runs at <http://127.0.0.1:5173>, with the local API at port 4310. Rebuild a
 
 The application includes no analytics, advertising or remote font requests. Opening a reference, repository or website link contacts that external site. Publishing this repository does not upload local health records: databases, exports, backups and secrets are excluded from version control.
 
-Use **Settings → Account & data → Full backup** for a restorable JSON archive. Backups may contain prior revisions and deleted-record content; CSV, PDF and JSON downloads are unencrypted files. Keep them private. If copying the database directly, stop the service first so that pending SQLite WAL writes are not omitted.
+Use **Settings → Backup & restore → Full backup** for a restorable JSON archive. Backups may contain prior revisions and deleted-record content; CSV, PDF and JSON downloads are unencrypted files. Keep them private. If copying the database directly, stop the service first so that pending SQLite WAL writes are not omitted.
 
 Read the [privacy statement](PRIVACY.md). Local authentication recovery and cloud encryption-key recovery are different mechanisms.
 
 ## Medical scope
 
-Catalog coverage is broader than model coverage. Concerta **18 mg** has a reconstruction of a reference group trace; its estimated terminal tail is separately identified. Ritalin IR **10 mg** uses a constructed parameter-based reference estimate. Other products and strengths do not inherit those models automatically.
+Catalog coverage is broader than model coverage. Concerta **18 mg** has a reconstruction of a reference group trace; the interface stops that curve at the published trace boundary. Missing contributions are marked **\* No data**, unknown readings show a dash, and partial totals carry an asterisk. Ritalin IR **10 mg** uses a constructed parameter-based reference estimate. Other products and strengths do not inherit those models automatically.
 
-Each dose has a read-only **Formula** disclosure. Unsupported or custom packages do not gain a reference curve merely by adding up to a reference dose. Previously saved illustrative assumptions remain readable, clearly labeled unvalidated; the interface no longer offers controls to create or accept them. Notes, package details and patch removal are retained separately under **Record details**.
+Each dose has a read-only **Formula** disclosure. Unsupported or custom packages do not gain a reference curve merely by adding up to a reference dose. Previously saved illustrative assumptions remain readable, clearly labeled unvalidated; the interface no longer offers controls to create or accept them. The dose editor omits optional notes, manufacturer and administration-detail controls. Existing metadata remains in saved records and backups; patches retain their removal-time control.
 
 These are not measurements of your drug concentration and do not recommend doses or determine safety. Unknown contributions remain unknown. Different medications, salts, liquids, patches and combination ingredients are not collapsed into a universal drug-effect total. Missing records do not establish that no medication was taken. Symptom reports do not establish that a medication caused a symptom.
 
@@ -83,7 +83,9 @@ The target address is **https://treeezh.com/drug**. The cloud edition has a sepa
 DRUG_EDITION=cloud pnpm build
 ```
 
-This sets `/drug/` as the asset base and marks the build as cloud. `server/cloud.mjs` rejects local-edition builds and local databases. It listens only on loopback behind an HTTPS proxy. See the [Azure deployment guide](docs/azure-vm-deployment.md) and [deployment templates](deploy/).
+This sets `/drug/` as the asset base and marks the build as cloud. `server/cloud.mjs` rejects local-edition builds and local databases. Its standalone mode listens on loopback behind an HTTPS proxy.
+
+For **Heroku → GitHub deployment**, connect this repository and select `main`. The included build script generates the cloud edition automatically; the Procfile starts `server/heroku.mjs` on Heroku's assigned port. It requires PostgreSQL through `DATABASE_URL` and the exact HTTPS `CLOUD_ORIGIN`. See the [Heroku deployment guide](docs/heroku-deployment.md) for configuration, costs and launch checks. The [Azure deployment guide](docs/azure-vm-deployment.md) remains an alternative.
 
 The cloud build opens a guest simulator without requiring an account. Guest medication choices, simulated dose rows and chart preferences stay in this browser's local storage **without encryption**. They are separate from actual medication history and are not uploaded. Use **Clear simulation** to remove the guest workspace on a shared browser. Signing in or creating an account does not automatically import guest or local-edition data.
 
@@ -95,7 +97,7 @@ Cloud **Current backup** exports an unencrypted snapshot of current records. It 
 
 Encryption does not hide usernames, session or connection metadata. It also does not protect an unlocked browser from malicious scripts or a hosting operator that changes the JavaScript delivered to it. The application and other pages on the same origin must be trusted; see the [privacy statement](PRIVACY.md).
 
-The domain has been purchased; **the public site is not deployed yet**. Provider selection and enrollment, a server, DNS, production HTTPS and production backup/restore verification remain pending. Local integration checks are not a production security audit. The [student hosting comparison](docs/student-hosting-options.md) covers Azure, Heroku, Appwrite and Netlify. The existing [VM deployment plan](docs/cloud-and-student-plan.md) uses Azure for Students; the old DigitalOcean GitHub student offer ended in 2026.
+The domain has been purchased and a Heroku app has been created. **Public deployment has not yet been verified.** Production routing, custom-domain HTTPS and production backup/restore verification remain pending. Local integration checks are not a production security audit. The [student hosting comparison](docs/student-hosting-options.md) covers Azure, Heroku, Appwrite and Netlify.
 
 ## Research and project origin
 

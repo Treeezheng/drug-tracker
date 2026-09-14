@@ -1,5 +1,5 @@
 import { products } from './catalog';
-import { CONCERTA_TAIL_HALF_LIFE_HOURS, CONCERTA_TRACE, MODEL_VERSION, modelGroup, RITALIN_REFERENCE, validIllustrationParameters } from './model';
+import { CONCERTA_TRACE, MODEL_VERSION, modelGroup, RITALIN_REFERENCE, validIllustrationParameters } from './model';
 import type { Dose } from './types';
 
 export interface DoseFormulaDescription {
@@ -35,11 +35,11 @@ export function describeDoseFormula(dose:Dose):DoseFormulaDescription {
       note:'t is hours since administration; C is ng/mL. Adult 10 mg reference estimate, not a personal measurement.',
     };
   }
-  const [lastT,lastC]=CONCERTA_TRACE[CONCERTA_TRACE.length-1];
+  const [lastT]=CONCERTA_TRACE[CONCERTA_TRACE.length-1];
   return {
-    kind:'reference',title:'Published profile · A; estimated tail · B',
-    equations:['C(t) = Cᵢ + (Cᵢ₊₁ − Cᵢ) × (t − tᵢ) / (tᵢ₊₁ − tᵢ)',`Tail, when enabled: C(t) = ${lastC} × 2^(−(t − ${lastT}) / ${CONCERTA_TAIL_HALF_LIFE_HOURS})`],
-    parameters:[`Interpolation between digitized points: 0 ≤ t ≤ ${lastT} h. Tail: t > ${lastT} h.`],
+    kind:'reference',title:'Published profile · A',
+    equations:['C(t) = Cᵢ + (Cᵢ₊₁ − Cᵢ) × (t − tᵢ) / (tᵢ₊₁ − tᵢ)'],
+    parameters:[`Interpolation: 0 ≤ t ≤ ${lastT} h. No data beyond ${lastT} h.`],
     note:'t is hours since administration; C is ng/mL. Adult 18 mg group profile, not a personal measurement.',
   };
 }

@@ -44,3 +44,21 @@ test('storage denial and malformed saved content are reported and never silently
   assert.throws(()=>readGuestWorkspace(denied),/denied/);assert.throws(()=>saveGuestWorkspace(denied,fixture()),/quota/);assert.throws(()=>clearGuestWorkspace(denied),/denied/);
   const {map,access}=storage();map.set(GUEST_STORAGE_KEY,'not json');assert.throws(()=>readGuestWorkspace(access));assert.equal(map.get(GUEST_STORAGE_KEY),'not json');
 });
+
+test('guest preferences default to five minutes and persist 1/5/10 without changing simulated timestamps',()=>{
+  assert.equal(freshGuestWorkspace('UTC').profile.timeIncrementMinutes,5);
+  const {access,map}=storage(),original=fixture();
+  for(const timeIncrementMinutes of [1,5,10] as const){
+    const next={...original,profile:{...original.profile,timeIncrementMinutes}};
+    saveGuestWorkspace(access,next);
+    assert.deepEqual(readGuestWorkspace(access),next);
+    assert.deepEqual(readGuestWorkspace(access)!.drafts,original.drafts);
+  }
+  const saved=map.get(GUEST_STORAGE_KEY);
+  for(const timeIncrementMinutes of [-1,0,2,15,1.5,'1',null]){
+    assert.throws(()=>saveGuestWorkspace(access,{...original,profile:{...original.profile,timeIncrementMinutes}} as never),/time increment/);
+    assert.equal(map.get(GUEST_STORAGE_KEY),saved);
+  }
+  const legacy=structuredClone(original);delete legacy.profile.timeIncrementMinutes;
+  saveGuestWorkspace(access,legacy);assert.equal(readGuestWorkspace(access)!.profile.timeIncrementMinutes,undefined);
+});
