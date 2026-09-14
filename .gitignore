@@ -1,0 +1,19 @@
+node_modules/
+dist/
+data/
+*.tsbuildinfo
+.DS_Store
+artifacts/
+.env*
+!.env.example
+
+# Never publish account data, credentials, or generated health exports.
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.pem
+*.key
+*.log
+exports/
+backups/

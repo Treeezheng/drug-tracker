@@ -1,0 +1,33 @@
+.symptoms-card{padding:22px;margin-top:20px}
+.symptom-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.symptom-heading h2{margin:0;font-size:18px}.symptom-heading>span{font-size:12px;color:var(--muted,#6d7380)}
+.symptom-form fieldset{border:0;padding:0;margin:0;min-width:0}.symptom-form fieldset:disabled{opacity:.65}
+.symptom-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.symptom-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid #dbe0e6;background:#fafbfc;border-radius:999px;padding:9px 13px;min-height:40px;font:inherit;font-size:13px;color:#555f6c;cursor:pointer}
+.symptom-chip.selected{color:#365f88;border-color:#9db4cb;background:#edf3f8}.symptom-chip:hover{border-color:#a4b5c5}.symptom-chip:focus-visible{outline:2px solid #477baa;outline-offset:3px}
+.symptom-time-row{display:flex;gap:10px;align-items:end;max-width:430px}.symptom-time-row .field{flex:1;min-width:0}.symptom-time-row .button{margin-bottom:0;min-height:40px}.symptom-time-row input{min-width:0;width:100%;box-sizing:border-box}
+.symptom-note{margin-top:13px}.symptom-note summary,.symptom-records-details>summary,.symptom-comparison>summary{cursor:pointer;font-size:13px;color:#5b6572;padding:8px 0}.symptom-note textarea{width:100%;box-sizing:border-box;resize:vertical;margin-top:6px}
+.symptom-form-actions{display:flex;justify-content:flex-end;margin-top:14px}.symptom-records-details{border-top:1px solid #e7eaf0;margin-top:18px;padding-top:8px}
+.symptom-record{display:flex;align-items:start;justify-content:space-between;gap:12px;border-bottom:1px solid #edf0f3;padding:13px 0}.symptom-record:last-child{border-bottom:0}.symptom-record-copy{min-width:0}.symptom-record time{font-size:12px;color:#707987}.symptom-record p{font-size:13px;margin:6px 0;line-height:1.5;overflow-wrap:anywhere}.symptom-record details summary{font-size:12px;color:#707987;cursor:pointer}.symptom-saved-note{white-space:pre-wrap}.symptom-record-actions{display:flex;gap:2px;flex-shrink:0}
+.symptom-frequency{display:grid;gap:14px}.symptom-frequency-row{display:grid;grid-template-columns:130px minmax(45px,1fr) 138px;gap:16px;align-items:center;font-size:13px}.symptom-bar{display:block;height:7px;border-radius:4px;background:#f0f3f6;overflow:hidden}.symptom-bar i{display:block;height:100%;background:#8da8be;border-radius:4px}.symptom-count{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.symptom-count small{font-size:12px;color:#707987}.symptom-none{font-size:12px;color:#6d7783;margin:17px 0 0}.symptom-comparison{border-top:1px solid #e7eaf0;margin-top:18px;padding-top:8px}.symptom-comparison-filters{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}.symptom-comparison-counts{display:grid;grid-template-columns:1fr 1fr;gap:12px}.symptom-comparison-counts>div{border-radius:8px;background:#f6f8fa;padding:15px;display:flex;flex-direction:column;gap:7px}.symptom-comparison-counts span{font-size:12px;color:#5c6875}.symptom-comparison-counts strong{font-size:25px;font-weight:500;font-variant-numeric:tabular-nums}.symptom-comparison-counts small,.symptom-method{font-size:11px;line-height:1.55;color:#74808c}.symptom-method{margin:12px 0 0}.symptom-empty{font-size:13px;line-height:1.6}
+@media(max-width:600px){.symptoms-card{padding:16px}.symptom-heading{gap:6px;margin-bottom:14px}.symptom-heading h2{font-size:17px}.symptom-chip{font-size:12px;padding:9px 11px;min-height:42px}.symptom-time-row{gap:8px}.symptom-time-row input{font-size:16px}.symptom-form-actions .button{width:100%;min-height:44px}.symptom-frequency-row{grid-template-columns:105px minmax(20px,1fr) 108px;gap:8px;font-size:12px}.symptom-count small{font-size:10px}.symptom-comparison-filters{grid-template-columns:1fr}.symptom-comparison-counts{gap:8px}.symptom-comparison-counts>div{padding:12px}.symptom-record-actions .icon-button{width:42px;min-height:42px}.symptom-time-row>.button{padding-left:10px;padding-right:10px}}
+
+.discomfort-disclosure>summary{font-size:14px;font-weight:500;padding-block:4px;color:var(--text)}
+.discomfort-disclosure[open]>summary{margin-bottom:16px}
+.symptom-time-details>summary,.symptom-note>summary{font-size:13px;color:var(--muted)}
+.symptom-time-details[open]>.symptom-time-row{margin-top:12px}
+
+.symptom-count{white-space:normal;overflow-wrap:anywhere}
+@media(max-width:600px){
+.symptom-frequency-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.symptom-frequency-row>span:first-child{grid-column:1;grid-row:1;overflow-wrap:anywhere}
+.symptom-frequency-row>.symptom-count{grid-column:2;grid-row:1}
+.symptom-frequency-row>.symptom-bar{grid-column:1/-1;grid-row:2}
+}
+
+.discomfort-disclosure{padding:0;margin-top:16px}
+.discomfort-disclosure>summary{box-sizing:border-box;min-height:56px;margin:0;padding:18px 20px;line-height:20px}
+.discomfort-disclosure:not([open])>summary{margin:0}
+.discomfort-disclosure[open]>summary{margin:0;border-bottom:1px solid var(--border)}
+.discomfort-disclosure>.symptom-form,.discomfort-disclosure>.symptom-records-details{margin:16px 20px}
+@media(max-width:600px){.discomfort-disclosure>summary{padding-inline:16px}.discomfort-disclosure>.symptom-form,.discomfort-disclosure>.symptom-records-details{margin-inline:16px}}

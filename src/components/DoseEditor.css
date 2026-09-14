@@ -1,0 +1,8 @@
+.dose-quantity-stepper{display:grid;grid-template-columns:30px minmax(32px,1fr) 30px;align-items:stretch;min-height:44px;border:1px solid #cbd2da;border-radius:5px;overflow:hidden;background:#fff}
+.dose-quantity-stepper:focus-within{border-color:var(--accent,#557ca2)}
+.dose-quantity-stepper>button{display:flex;align-items:center;justify-content:center;min-width:0;min-height:42px;padding:0;border:0;background:#f8f9fb;color:#536171;font:inherit;font-size:18px;line-height:1;touch-action:manipulation}
+.dose-quantity-stepper>button:hover:not(:disabled){background:#edf1f5}.dose-quantity-stepper>button:disabled{color:#b2bac3}.dose-quantity-stepper>button:focus-visible{outline:2px solid var(--accent,#557ca2);outline-offset:-3px}
+.dose-quantity-stepper>input{width:100%;min-width:0;height:42px;border:0;border-radius:0;padding:7px 2px;text-align:center;font-variant-numeric:tabular-nums;appearance:textfield;-moz-appearance:textfield}
+.dose-quantity-stepper>input::-webkit-inner-spin-button,.dose-quantity-stepper>input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.dose-quantity-stepper>input:focus-visible{outline-offset:-3px}
+@media(max-width:700px){.dose-quantity-stepper{grid-template-columns:44px minmax(32px,1fr) 44px;min-height:44px}.dose-quantity-stepper>button,.dose-quantity-stepper>input{min-height:44px;height:44px}.dose-quantity-stepper>input{font-size:16px}}

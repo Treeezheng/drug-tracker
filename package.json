@@ -1,0 +1,7 @@
+{
+  "name": "dose-timeline", "version": "0.1.0", "license": "0BSD", "private": true, "type": "module",
+  "engines": {"node": ">=24.0.0"},
+  "scripts": {"dev": "node scripts/dev.mjs", "build": "tsc -b && vite build", "start": "node server/index.mjs", "test": "node --import tsx --test tests/*.test.ts && node --test tests/*.test.mjs", "check": "tsc -b"},
+  "dependencies": {"react": "^19.2.0", "react-dom": "^19.2.0", "lucide-react": "^0.577.0", "@js-temporal/polyfill": "^0.5.1", "idb-keyval": "^6.2.2", "jspdf": "^4.2.0", "@fontsource/inter": "^5.2.8", "@fontsource/ibm-plex-mono": "^5.2.7"},
+  "devDependencies": {"typescript": "^5.9.3", "vite": "^8.0.0", "@vitejs/plugin-react": "^6.0.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0", "@types/node": "^24.0.0", "tsx": "^4.21.0"}
+}

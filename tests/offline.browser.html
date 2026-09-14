@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Dose Timeline offline storage verification</title>
+<style>body{font:15px system-ui;max-width:900px;margin:40px auto;padding:20px;color:#173e37}pre{white-space:pre-wrap}h1{font-size:24px}</style>
+<h1>Offline storage verification</h1>
+<p>Uses fresh synthetic browser keys and a mocked API. No actual account or health history is created.</p>
+<pre id="results">Running…</pre>
+<script type="module">
+import { api, ApiError, cacheData, cachedData, queueMutation, queueCount, syncQueue, clearCache, setActiveAccount, pendingChanges, discardPendingChange } from '/src/lib/api.ts';
+
+const owner = `storage-test-${crypto.randomUUID()}`;
+const other = `storage-test-${crypto.randomUUID()}`;
+const empty = () => ({profile:null,doses:[],scenarios:[],favorites:[],checkins:[]});
+const result = document.querySelector('#results');
+const lines = [];
+const realFetch = window.fetch;
+let sessionOwner = owner;
+let mutationCount = 0;
+let conflict = false;
+let blockNext = false;
+let failNext = false;
+let favoriteResponse;
+let entered, release;
+const capturedHeaders = [];
+const assert = (condition, message) => { if(!condition) throw new Error(message); };
+const test = async (name, run) => {await run();lines.push(`PASS ${name}`);result.textContent=lines.join('\n');};
+const json = (data,status=200) => new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
+const dose = (id) => ({id,productId:'ritalin',productName:'Synthetic fixture',formulation:'Synthetic test',strength:'10',quantity:'1',unit:'tablet',amountMg:'10',administeredAt:'2026-09-13T08:00:00Z',timeZone:'UTC',status:'actual',note:'Synthetic test only'});
+window.fetch = async (url, options={}) => {
+  if (url==='/api/session') return json({user:sessionOwner?{id:sessionOwner,email:'synthetic@example.test',name:'Test'}:null});
+  if (!String(url).startsWith('/api/')) return realFetch(url,options);
+  mutationCount++;
+  capturedHeaders.push(options.headers?.['X-Dose-Owner']);
+  if (options.headers?.['X-Dose-Owner']!==sessionOwner) return json({error:'Wrong account'},401);
+  if (failNext) { failNext=false; throw new TypeError('Synthetic connection interruption'); }
+  if (conflict) return json({error:'Synthetic concurrent edit',current:{revision:4}},409);
+  if (blockNext) {blockNext=false;entered();await new Promise(resolve=>{release=resolve;});}
+  const body=JSON.parse(options.body||'{}');
+  if (favoriteResponse&&String(url).startsWith('/api/favorites/')&&options.method==='PUT') return json(favoriteResponse);
+  return json({...body,id:String(url).split('/').at(-1),revision:(body.revision||0)+1});
+};
+
+try {
+  setActiveAccount(owner);
+  await cacheData(owner,empty());
+  await test('Concurrent enqueues preserve every distinct record', async()=>{
+    await Promise.all(Array.from({length:30},(_,i)=>queueMutation(owner,`/doses/record-${i}`,dose(`record-${i}`))));
+    assert(await queueCount(owner)===30,'A concurrent enqueue was lost');
+    assert((await cachedData(owner)).doses.length===30,'Pending rows were not restored from durable outbox');
+  });
+  await test('Duplicate pending path rejects without dropping existing work',async()=>{
+    let rejected=false;
+    try{await queueMutation(owner,'/doses/record-0',dose('record-0'));}catch(error){rejected=error instanceof ApiError&&error.status===409;}
+    assert(rejected,'Duplicate pending edit should need conflict review');
+    assert(await queueCount(owner)===30,'Duplicate changed the queue');
+  });
+  await test('Refreshing a server snapshot retains pending records in its returned view',async()=>{
+    const visible=await cacheData(owner,empty());
+    assert(visible.doses.length===30,'Refresh hid queued records');
+    assert((await cachedData(owner)).doses.length===30,'Reload lost pending cache overlay');
+  });
+  await test('Direct edits cannot overtake a pending edit of the same record',async()=>{
+    const before=mutationCount;
+    let rejected=false;
+    try{await api('/doses/record-0','PUT',dose('record-0'),owner);}catch(error){rejected=error instanceof ApiError&&error.status===409;}
+    assert(rejected&&mutationCount===before,'Pending record was mutated before replay');
+  });
+  await test('Concurrent additions during replay survive acknowledgment',async()=>{
+    blockNext=true;
+    const reached=new Promise(resolve=>{entered=resolve;});
+    const replay=syncQueue(owner);
+    await reached;
+    await Promise.all(Array.from({length:10},(_,i)=>queueMutation(owner,`/doses/late-${i}`,dose(`late-${i}`))));
+    assert(await queueCount(owner)===40,'Concurrent additions missing during request');
+    release();
+    await replay;
+    assert(await queueCount(owner)===0,'Successfully replayed entries remain queued');
+    const cache=await cachedData(owner);
+    assert(cache.doses.length===40,'An acknowledged record was lost');
+    assert(cache.doses.every(row=>row.revision===1),'Acknowledged revisions were not cached');
+    assert(capturedHeaders.every(id=>id===owner),'Replay omitted expected-owner binding');
+  });
+  await test('Changing the cookie owner blocks replay without consuming the outbox',async()=>{
+    await queueMutation(owner,'/doses/owner-check',dose('owner-check'));
+    const before=mutationCount;
+    sessionOwner=other;
+    let rejected=false;
+    try{await syncQueue(owner);}catch(error){rejected=error instanceof ApiError&&error.status===401;}
+    assert(rejected&&before===mutationCount,'Wrong owner reached the mutation endpoint');
+    assert(await queueCount(owner)===1,'Wrong-owner replay consumed pending record');
+    sessionOwner=owner;
+  });
+  await test('Conflict responses keep the exact pending request and expose current revision',async()=>{
+    conflict=true;
+    let rejected=false;
+    try{await syncQueue(owner);}catch(error){rejected=error instanceof ApiError&&error.status===409&&error.current.revision===4;}
+    assert(rejected,'Conflict context was discarded');
+    assert(await queueCount(owner)===1,'Conflict discarded the pending request');
+    conflict=false;
+  });
+  await test('Sign-out cleanup cannot silently erase a pending record',async()=>{
+    let rejected=false;
+    try{await clearCache(owner);}catch{rejected=true;}
+    assert(rejected&&await queueCount(owner)===1,'Pending health record was erased');
+  });
+  await test('Pending deletes overlay the cache and acknowledged deletes remain absent',async()=>{
+    await syncQueue(owner);
+    await queueMutation(owner,'/doses/record-0',{revision:1},'DELETE');
+    assert(!(await cachedData(owner)).doses.some(row=>row.id==='record-0'),'Pending delete left stale visible row');
+    await syncQueue(owner);
+    assert(!(await cachedData(owner)).doses.some(row=>row.id==='record-0'),'Acknowledgment restored deleted row');
+  });
+  await test('Explicit account deletion may clear pending cache and outbox together',async()=>{
+    await queueMutation(owner,'/doses/erase-check',dose('erase-check'));
+    await clearCache(owner,true);
+    assert(await queueCount(owner)===0,'Explicit deletion left pending records');
+    assert(await cachedData(owner)===undefined,'Explicit deletion left cache');
+  });
+  await test('Acknowledged online mutations cache their server revisions without a React cache effect',async()=>{
+    const saved=await api('/doses/online-record','PUT',dose('online-record'),owner);
+    assert(saved.revision===1,'Online response omitted revision');
+    assert((await cachedData(owner)).doses[0].revision===1,'Online response was not cached');
+    await api('/doses/online-record','DELETE',{revision:1},owner);
+    assert((await cachedData(owner)).doses.length===0,'Acknowledged online delete remained in cache');
+  });
+  await test('Explicit conflict resolution removes only the selected request and later changes can resume',async()=>{
+    await queueMutation(owner,'/doses/conflict-selected',dose('conflict-selected'));
+    await queueMutation(owner,'/doses/remaining-change',dose('remaining-change'));
+    const list=await pendingChanges(owner);
+    assert(list.length===2,'Pending review did not include both changes');
+    list[0].body.note='Changed only in the review copy';
+    assert((await pendingChanges(owner))[0].body.note==='Synthetic test only','Pending review mutated stored data');
+    await discardPendingChange(owner,list[0].id);
+    assert(await queueCount(owner)===1,'Resolution dropped more than the selected request');
+    assert((await pendingChanges(owner))[0].path==='/doses/remaining-change','Wrong pending request was discarded');
+    const before=mutationCount;
+    await syncQueue(owner);
+    assert(mutationCount===before+1&&await queueCount(owner)===0,'Remaining queue could not resume');
+  });
+  await test('Inventory receipts queue against old caches without inventory and retain acknowledged exact quantities',async()=>{
+    await cacheData(owner,empty());
+    const receipt={id:'receipt-queued',productId:'ritalin',productName:'Synthetic fixture',packageStrength:'10',strengthUnit:'mg',unit:'tablet',quantity:'49.5',receivedAt:'2026-09-13T08:00:00Z',timeZone:'UTC',note:'Synthetic receipt'};
+    await queueMutation(owner,'/inventory/receipt-queued',receipt);
+    assert((await cachedData(owner)).inventory[0].quantity==='49.5','Receipt was not restored from the queue');
+    await syncQueue(owner);
+    assert((await cachedData(owner)).inventory[0].revision===1,'Receipt acknowledgment missing');
+    await api('/inventory/receipt-queued','DELETE',{revision:1},owner);
+    assert((await cachedData(owner)).inventory.length===0,'Receipt deletion was not cached');
+  });
+  await test('A connection interruption preserves the exact durable request for a later retry',async()=>{
+    await queueMutation(owner,'/doses/network-retry',dose('network-retry'));
+    const before=await pendingChanges(owner);
+    failNext=true;
+    let failed=false;
+    try{await syncQueue(owner);}catch(error){failed=error instanceof TypeError;}
+    assert(failed,'Synthetic connection failure was not propagated');
+    assert(JSON.stringify(await pendingChanges(owner))===JSON.stringify(before),'Connection failure changed the saved request');
+    assert((await cachedData(owner)).doses.some(row=>row.id==='network-retry'),'Reload lost the pending record');
+    await syncQueue(owner);
+    assert(await queueCount(owner)===0,'Retry did not acknowledge the saved request');
+    assert((await cachedData(owner)).doses.filter(row=>row.id==='network-retry').length===1,'Retry duplicated the visible record');
+  });
+  await test('Concurrent sync callers send each pending record once',async()=>{
+    await queueMutation(owner,'/doses/concurrent-replay',dose('concurrent-replay'));
+    const before=mutationCount;
+    await Promise.all([syncQueue(owner),syncQueue(owner),syncQueue(owner)]);
+    assert(mutationCount===before+1,'Concurrent callers duplicated a replay request');
+    assert(await queueCount(owner)===0,'Concurrent replay left an acknowledged request queued');
+  });
+  await test('Authentication and destructive account actions never enter the health-record outbox',async()=>{
+    for(const [path,method] of [['/auth/login','PUT'],['/auth/recover','PUT'],['/auth/logout','DELETE'],['/account','DELETE'],['/import','PUT'],['/profile','DELETE']]){
+      let rejected=false;
+      try{await queueMutation(owner,path,{password:'synthetic-secret-not-to-store'},method);}catch{rejected=true;}
+      assert(rejected,`Privileged path ${path} entered the outbox`);
+    }
+    assert(await queueCount(owner)===0,'A rejected privileged action left queued credentials');
+  });
+  await test('A backup import cannot overtake locally pending records',async()=>{
+    await queueMutation(owner,'/doses/import-guard',dose('import-guard'));
+    const before=mutationCount;
+    let rejected=false;
+    try{await api('/import','POST',{backup:{},mode:'replace'},owner);}catch(error){rejected=error instanceof ApiError&&error.status===409;}
+    assert(rejected&&mutationCount===before,'Replace import reached the server despite pending work');
+    assert(await queueCount(owner)===1,'Blocked import consumed pending work');
+    await syncQueue(owner);
+  });
+  await test('Clearing one account leaves another account cache and outbox isolated',async()=>{
+    setActiveAccount(other);
+    await cacheData(other,{...empty(),doses:[dose('other-visible')]});
+    await queueMutation(other,'/doses/other-pending',dose('other-pending'));
+    setActiveAccount(owner);
+    await clearCache(owner,true);
+    assert(await cachedData(owner)===undefined,'The selected account cache was not cleared');
+    const visible=await cachedData(other);
+    assert(visible.doses.length===2&&await queueCount(other)===1,'Clearing one account erased another account data');
+    let rejected=false;
+    try{await discardPendingChange(other,(await pendingChanges(owner))[0]?.id||'missing');}catch(error){rejected=error instanceof ApiError&&error.status===401;}
+    assert(rejected&&await queueCount(other)===1,'A different active account modified another outbox');
+    await clearCache(other,true);
+  });
+  await test('A late session response cannot reactivate the previous account',async()=>{
+    const fetchBefore=window.fetch;
+    let finish,started;
+    const reached=new Promise(resolve=>{started=resolve;});
+    window.fetch=async(url,options)=>{
+      if(url==='/api/session'){started();await new Promise(resolve=>{finish=resolve;});return json({user:{id:owner,email:'synthetic@example.test',name:'Test'}});}
+      return fetchBefore(url,options);
+    };
+    try{
+      const pending=api('/session');
+      await reached;
+      setActiveAccount(other);
+      finish();
+      await pending;
+      let rejected=false;
+      try{await queueMutation(owner,'/doses/late-session',dose('late-session'));}catch(error){rejected=error instanceof ApiError&&error.status===401;}
+      assert(rejected,'Late session response reactivated a previous account');
+    }finally{window.fetch=fetchBefore;setActiveAccount(owner);}
+  });
+  await test('Late online acknowledgments cannot recreate an explicitly cleared account cache',async()=>{
+    blockNext=true;
+    const reached=new Promise(resolve=>{entered=resolve;});
+    const pending=api('/doses/late-ack','PUT',dose('late-ack'),owner);
+    await reached;
+    setActiveAccount(null);
+    await clearCache(owner,true);
+    release();
+    await pending;
+    assert(await cachedData(owner)===undefined,'An old acknowledgment recreated cleared account health data');
+    setActiveAccount(owner);
+  });
+  await test('A separate client clearing the account also invalidates an in-flight acknowledgment',async()=>{
+    const peer=await import(`/src/lib/api.ts?independent-client=${crypto.randomUUID()}`);
+    peer.setActiveAccount(owner);
+    blockNext=true;
+    const reached=new Promise(resolve=>{entered=resolve;});
+    const pending=api('/doses/peer-late-ack','PUT',dose('peer-late-ack'),owner);
+    await reached;
+    await peer.clearCache(owner,true);
+    release();
+    await pending;
+    assert(await cachedData(owner)===undefined,'Another client cleared the account but this client recreated its health cache');
+    peer.setActiveAccount(null);
+  });
+  await test('Deleting a visible favorite cannot reveal a hidden legacy duplicate in an old cache',async()=>{
+    const base={productId:'ritalin',strength:'10',quantity:'1',revision:1};
+    await cacheData(owner,{...empty(),doses:[dose('actual-one'),dose('actual-two')],favorites:[
+      {...base,id:'legacy-old',updatedAt:'2026-09-12T00:00:00Z'},
+      {...base,id:'legacy-canonical',packageStrength:'10.0',updatedAt:'2026-09-13T00:00:00Z'},
+    ]});
+    assert((await cachedData(owner)).favorites.length===1,'Legacy favorites still display twice');
+    await queueMutation(owner,'/favorites/legacy-canonical',{revision:1},'DELETE');
+    const visible=await cachedData(owner);
+    assert(visible.favorites.length===0,'Deleting the canonical favorite revealed an old copy');
+    assert(visible.doses.length===2,'Favorite normalization removed legitimate repeated administrations');
+    await syncQueue(owner);
+    assert((await cachedData(owner)).favorites.length===0,'Acknowledgment restored a duplicate favorite');
+  });
+  await test('Favorite acknowledgments keep the server canonical ID for online writes and offline replay',async()=>{
+    favoriteResponse={id:'canonical-favorite',productId:'ritalin',strength:'10',quantity:'1',revision:1};
+    try{
+      await cacheData(owner,{...empty(),favorites:[favoriteResponse]});
+      const request={...favoriteResponse,id:'different-request-id'};
+      delete request.revision;
+      const saved=await api('/favorites/different-request-id','PUT',request,owner);
+      assert(saved.id==='canonical-favorite','Server canonical response ID was discarded');
+      assert((await cachedData(owner)).favorites.length===1&&(await cachedData(owner)).favorites[0].id==='canonical-favorite','Online cache used the duplicate request ID');
+      await queueMutation(owner,'/favorites/offline-duplicate',{...request,id:'offline-duplicate'});
+      await syncQueue(owner);
+      assert(await queueCount(owner)===0,'Canonical response left the duplicate pending');
+      assert((await cachedData(owner)).favorites.length===1&&(await cachedData(owner)).favorites[0].id==='canonical-favorite','Replay cache used the duplicate request ID');
+    }finally{favoriteResponse=undefined;}
+  });
+  lines.push(`\n${lines.length} checks passed.`);
+  document.body.dataset.testStatus='passed';
+} catch(error) {
+  lines.push(`FAIL ${error.stack||error.message}`);
+  document.body.dataset.testStatus='failed';
+} finally {
+  window.fetch=realFetch;
+  await clearCache(owner,true);
+  await clearCache(other,true);
+  // Remove the synthetic invalidation markers too; real account clears retain
+  // these non-health markers so another tab cannot undo cache deletion.
+  await new Promise((resolve,reject)=>{
+    const request=indexedDB.open('keyval-store');
+    request.onerror=()=>reject(request.error);
+    request.onsuccess=()=>{
+      const db=request.result,tx=db.transaction('keyval','readwrite');
+      tx.objectStore('keyval').delete(`cache-epoch:${owner}`);
+      tx.objectStore('keyval').delete(`cache-epoch:${other}`);
+      tx.oncomplete=()=>{db.close();resolve();};
+      tx.onerror=tx.onabort=()=>{db.close();reject(tx.error);};
+    };
+  });
+  setActiveAccount(null);
+  result.textContent=lines.join('\n');
+}
+</script></html>
